@@ -28,6 +28,9 @@ export const getEmployees = async (req, res) => {
                 *,
                 departments (
                     name
+                ),
+                employee_bank_details (
+                    *
                 )
             `
       ) // Select all employee fields and department name
