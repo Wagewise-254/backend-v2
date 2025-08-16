@@ -6,6 +6,12 @@ import  sendEmail  from './services/email.js';
 import companyRoutes from './routes/companyRoutes.js'
 import hrRoutes from './routes/hrRoutes.js';
 import payrollRoutes from './routes/payrollRoutes.js';
+import helbRoutes from './routes/helbRoutes.js';
+import statutoryRoutes from './routes/statutoryRoutes.js';
+import allowanceRoutes from './routes/allowanceRoutes.js';
+import allowanceTypeRoutes from './routes/allowanceTypeRoutes.js';
+import deductionRoutes from './routes/deductionRoutes.js';
+import deductionTypeRoutes from './routes/deductionTypeRoutes.js';
 
 dotenv.config();
 
@@ -53,6 +59,21 @@ app.use('/api/company', hrRoutes);
 
 // Use Payroll-related routes (e.g., /api/company/:companyId/payroll/runs)
 app.use('/api/company', payrollRoutes);
+
+// Use Allowance routes
+app.use('/api/company', allowanceRoutes);
+app.use('/api/company', allowanceTypeRoutes);
+
+// Use Deduction routes
+app.use('/api/company', deductionRoutes);
+app.use('/api/company', deductionTypeRoutes);
+
+// Mount under company & employee context
+app.use('/api/companies/:companyId/employees', helbRoutes);
+
+// Mount statutory routes
+app.use('/api/companies/:companyId/statutories', statutoryRoutes);
+
 
 
 const PORT = process.env.PORT || 3001;
