@@ -1,0 +1,72 @@
+[
+  {
+    "bank_name": "Equity Bank",
+    "bank_code": "68",
+    "branches": [
+      {
+        "branch_name": "Head Office",
+        "branch_code": "000"
+      },
+      {
+        "branch_name": "Corporate Branch",
+        "branch_code": "004"
+      }
+    ]
+  },
+  {
+    "bank_name": "KCB Bank",
+    "bank_code": "01",
+    "branches": [
+      {
+        "branch_name": "Kenyatta Avenue",
+        "branch_code": "100"
+      },
+      {
+        "branch_name": "Moi Avenue",
+        "branch_code": "102"
+      }
+    ]
+  },
+  {
+    "bank_name": "Co-operative Bank of Kenya",
+    "bank_code": "11",
+    "branches": [
+      {
+        "branch_name": "Co-op House",
+        "branch_code": "000"
+      },
+      {
+        "branch_name": "Upperhill",
+        "branch_code": "005"
+      }
+    ]
+  },
+  {
+    "bank_name": "Standard Chartered Bank",
+    "bank_code": "02",
+    "branches": [
+      {
+        "branch_name": "Head Office",
+        "branch_code": "000"
+      },
+      {
+        "branch_name": "Wabera Street",
+        "branch_code": "001"
+      }
+    ]
+  },
+  {
+    "bank_name": "Absa Bank Kenya Plc",
+    "bank_code": "03",
+    "branches": [
+      {
+        "branch_name": "Absa Centre",
+        "branch_code": "000"
+      },
+      {
+        "branch_name": "Westlands",
+        "branch_code": "001"
+      }
+    ]
+  }
+]

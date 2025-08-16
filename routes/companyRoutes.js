@@ -1,6 +1,6 @@
 // backend/routes/companyRoutes.js
 import express from "express";
-import { getCompanies, addCompany } from '../controllers/companyController.js'
+import { getCompanies, addCompany, updateCompany } from '../controllers/companyController.js'
 import verifyToken from '../middleware/auth.js'
 import multer from "multer";
 
@@ -12,5 +12,6 @@ const router = express.Router();
 // All company routes will be protected by the verifyToken middleware
 router.get('/', verifyToken, getCompanies);
 router.post('/', verifyToken, upload.single('logo'), addCompany);
+router.put('/:id', verifyToken, upload.single('logo'), updateCompany);
 
 export default router;

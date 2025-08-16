@@ -4,6 +4,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import  sendEmail  from './services/email.js'; 
 import companyRoutes from './routes/companyRoutes.js'
+import hrRoutes from './routes/hrRoutes.js';
+import payrollRoutes from './routes/payrollRoutes.js';
 
 dotenv.config();
 
@@ -45,6 +47,13 @@ app.post('/api/welcome-email', async (req, res) => {
 
 // Use the new company routes
 app.use('/api/companies', companyRoutes);
+
+// Use HR-related routes (e.g., /api/company/:companyId/employees, /api/company/:companyId/departments)
+app.use('/api/company', hrRoutes);
+
+// Use Payroll-related routes (e.g., /api/company/:companyId/payroll/runs)
+app.use('/api/company', payrollRoutes);
+
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {

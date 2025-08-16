@@ -87,4 +87,48 @@ export const getCompanies = async (req, res) => {
     }
 };
 
-//module.exports = { addCompany, getCompanies };
+// Update company
+export const updateCompany = async (req, res) => {
+  const companyId = req.params.id;
+  const userId = req.userId;
+  const updates = req.body;
+  const logoFile = req.file;
+
+  try {
+    let logoUrl = updates.logo_url; // keep old logo unless replaced
+
+    // Handle logo upload
+    if (logoFile) {
+      const fileExt = logoFile.originalname.split('.').pop();
+      const fileName = `${userId}/${uuidv4()}.${fileExt}`;
+      const { error: uploadError } = await supabase.storage
+        .from('company_logos')
+        .upload(fileName, logoFile.buffer, { contentType: logoFile.mimetype });
+
+      if (uploadError) throw uploadError;
+
+      const { data: { publicUrl } } = supabase.storage
+        .from('company_logos')
+        .getPublicUrl(fileName);
+
+      logoUrl = publicUrl;
+    }
+
+    // Update company
+    const { data, error } = await supabase
+      .from('companies')
+      .update({ ...updates, logo_url: logoUrl })
+      .eq('id', companyId)
+      .eq('user_id', userId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.status(200).json(data);
+  } catch (err) {
+    console.error('Update company error:', err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
