@@ -28,7 +28,7 @@ export const getCompanyStatutories = async (req, res) => {
 
     const { data, error } = await supabase
       .from('employees')
-      .select('id, first_name, last_name, pays_paye, pays_nssf, pays_shif, pays_housing_levy, pays_helb')
+      .select('id, employee_number, first_name, last_name, pays_paye, pays_nssf, pays_housing_levy, pays_helb')
       .eq('company_id', companyId);
 
     if (error) throw error;
@@ -53,7 +53,7 @@ export const getEmployeeStatutories = async (req, res) => {
 
     const { data, error } = await supabase
       .from('employees')
-      .select('id, first_name, last_name, pays_paye, pays_nssf, pays_shif, pays_housing_levy, pays_helb')
+      .select('id, employee_number, first_name, last_name, pays_paye, pays_nssf, pays_housing_levy, pays_helb')
       .eq('company_id', companyId)
       .eq('id', employeeId)
       .single();
@@ -70,7 +70,7 @@ export const getEmployeeStatutories = async (req, res) => {
 export const updateEmployeeStatutories = async (req, res) => {
   const { companyId, employeeId } = req.params;
   const userId = req.userId;
-  const { pays_paye, pays_nssf, pays_shif, pays_housing_levy, pays_helb } = req.body;
+  const { pays_paye, pays_nssf, pays_housing_levy, pays_helb } = req.body;
 
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
@@ -80,7 +80,7 @@ export const updateEmployeeStatutories = async (req, res) => {
 
     const { data, error } = await supabase
       .from('employees')
-      .update({ pays_paye, pays_nssf, pays_shif, pays_housing_levy, pays_helb })
+      .update({ pays_paye, pays_nssf, pays_housing_levy, pays_helb })
       .eq('company_id', companyId)
       .eq('id', employeeId)
       .select()

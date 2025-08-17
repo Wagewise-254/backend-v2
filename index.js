@@ -72,7 +72,7 @@ app.use('/api/company', deductionTypeRoutes);
 app.use('/api/companies/:companyId/employees', helbRoutes);
 
 // Mount statutory routes
-app.use('/api/companies/:companyId/statutories', statutoryRoutes);
+app.use('/api/companies/:companyId', statutoryRoutes);
 
 
 
