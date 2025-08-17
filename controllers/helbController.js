@@ -15,14 +15,14 @@ const checkCompanyOwnership = async (companyId, userId) => {
   return true;
 };
 
-// CREATE
+// CREATE: Add a new HELB record and update the employee's pays_helb flag
 export const createHelbRecord = async (req, res) => {
   const { companyId, employeeId } = req.params;
   const userId = req.userId;
   const { helb_account_number, initial_balance, monthly_deduction } = req.body;
 
-  if (!helb_account_number || !initial_balance || !monthly_deduction) {
-    return res.status(400).json({ error: 'All fields are required.' });
+  if (!helb_account_number || initial_balance === undefined || monthly_deduction === undefined) {
+    return res.status(400).json({ error: 'All required fields must be provided.' });
   }
 
   try {
@@ -31,31 +31,42 @@ export const createHelbRecord = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized to access this company.' });
     }
 
-    const { data, error } = await supabase
+    const { data: helbData, error: helbError } = await supabase
       .from('helb_deductions')
       .insert({
         company_id: companyId,
         employee_id: employeeId,
         helb_account_number,
         initial_balance,
-        current_balance: initial_balance,
+        current_balance: initial_balance, // Initialize current_balance with initial_balance
         monthly_deduction,
-        status: 'Active',
+        status: 'Active'
       })
       .select()
       .single();
 
-    if (error) throw error;
+    if (helbError) {
+        throw new Error(`Failed to create HELB record: ${helbError.message}`);
+    }
 
-    await supabase
+    // Update the employee's pays_helb flag to true
+    const { data: employeeData, error: employeeError } = await supabase
       .from('employees')
       .update({ pays_helb: true })
-      .eq('id', employeeId);
+      .eq('id', employeeId)
+      .eq('company_id', companyId)
+      .select()
+      .single();
 
-    res.status(201).json(data);
-  } catch (error) {
-    console.error('Create HELB record error:', error);
-    res.status(500).json({ error: 'Failed to create HELB record.' });
+      if (employeeError) {
+        // Log the error but don't fail the entire request, as the HELB record was already created.
+        console.error('Failed to update employee pays_helb flag:', employeeError);
+    }
+
+    res.status(201).json(helbData);
+  } catch (err) {
+    console.error('Create HELB record error:', err);
+    res.status(500).json({ error: err.message || 'Failed to create HELB record.' });
   }
 };
 
@@ -67,7 +78,7 @@ export const getHelbRecord = async (req, res) => {
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized.' });
+      return res.status(403).json({ error: 'Unauthorized to access this HELB record.' });
     }
 
     const { data, error } = await supabase
@@ -77,12 +88,52 @@ export const getHelbRecord = async (req, res) => {
       .eq('company_id', companyId)
       .single();
     
-    if (error && error.code !== 'PGRST116') throw error;
+    if (error) {
+      if (error.code === 'PGRST116') { // No rows found
+        return res.status(404).json({ error: 'HELB record not found for this employee.' });
+      }
+      throw error;
+    }
     
     res.status(200).json(data || {});
   } catch (error) {
     console.error('Get HELB record error:', error);
     res.status(500).json({ error: 'Failed to get HELB record.' });
+  }
+};
+
+// GET: Get all HELB records for a company, joining with employee data
+export const getCompanyHelbRecords = async (req, res) => {
+  const { companyId } = req.params;
+  const userId = req.userId;
+
+  try {
+    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    if (!isAuthorized) {
+      return res.status(403).json({ error: 'Unauthorized to access this company.' });
+    }
+
+    // Join the helb_deductions table with the employees table to get names
+    const { data, error } = await supabase
+      .from('helb_deductions')
+      .select('*, employees(first_name, last_name, employee_number)')
+      .eq('company_id', companyId);
+
+    if (error) throw error;
+
+    // Flatten the data for easier use on the frontend
+    const flattenedData = data.map(record => ({
+      ...record,
+      first_name: record.employees.first_name,
+      last_name: record.employees.last_name,
+      employee_number: record.employees.employee_number,
+      employees: undefined // Remove the nested employees object
+    }));
+
+    res.status(200).json(flattenedData);
+  } catch (err) {
+    console.error('Fetch company HELB records error:', err);
+    res.status(500).json({ error: 'Failed to fetch company HELB records.' });
   }
 };
 
@@ -125,21 +176,31 @@ export const deleteHelbRecord = async (req, res) => {
       return res.status(403).json({ error: 'Unauthorized to delete this HELB record.' });
     }
 
-    const { error } = await supabase
+    // First, delete the HELB record
+    const { error: deleteError } = await supabase
       .from('helb_deductions')
       .delete()
       .eq('employee_id', employeeId)
       .eq('company_id', companyId);
 
-    if (error) throw error;
+    if (deleteError) {
+      throw new Error(`Failed to delete HELB record: ${deleteError.message}`);
+    }
 
-    await supabase
+    // Then, update the employee's pays_helb flag back to false
+    const { error: employeeError } = await supabase
       .from('employees')
       .update({ pays_helb: false })
-      .eq('id', employeeId);
+      .eq('id', employeeId)
+      .eq('company_id', companyId);
 
-    res.json({ message: 'HELB record deleted' });
+    if (employeeError) {
+      console.error('Failed to update employee pays_helb flag after deletion:', employeeError);
+    }
+
+     res.status(200).json({ message: 'HELB record deleted successfully.' });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to delete HELB record' });
+    console.error('Delete HELB record error:', err);
+    res.status(500).json({ error: 'Failed to delete HELB record.' });
   }
 };
