@@ -115,22 +115,24 @@ export const getCompanyHelbRecords = async (req, res) => {
 
     // Join the helb_deductions table with the employees table to get names
     const { data, error } = await supabase
-      .from('helb_deductions')
-      .select('*, employees(first_name, last_name, employee_number)')
+      .from('employees')
+      .select(`
+        id,
+        first_name,
+        last_name,
+        employee_number,
+        helb_deductions (
+          id,
+          helb_account_number,
+          monthly_deduction,
+          status
+        )
+      `)
       .eq('company_id', companyId);
 
-    if (error) throw error;
+      if (error) throw error;
 
-    // Flatten the data for easier use on the frontend
-    const flattenedData = data.map(record => ({
-      ...record,
-      first_name: record.employees.first_name,
-      last_name: record.employees.last_name,
-      employee_number: record.employees.employee_number,
-      employees: undefined // Remove the nested employees object
-    }));
-
-    res.status(200).json(flattenedData);
+    res.status(200).json(data);
   } catch (err) {
     console.error('Fetch company HELB records error:', err);
     res.status(500).json({ error: 'Failed to fetch company HELB records.' });
@@ -141,7 +143,7 @@ export const getCompanyHelbRecords = async (req, res) => {
 export const updateHelbRecord = async (req, res) => {
   const { companyId, employeeId } = req.params;
   const userId = req.userId;
-  const { monthly_deduction, is_active } = req.body;
+  const { monthly_deduction, status } = req.body;
 
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
@@ -151,7 +153,7 @@ export const updateHelbRecord = async (req, res) => {
 
     const { data, error } = await supabase
       .from('helb_deductions')
-      .update({ monthly_deduction, is_active })
+      .update({ monthly_deduction, status })
       .eq('employee_id', employeeId)
       .eq('company_id', companyId)
       .select()
