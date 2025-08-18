@@ -32,21 +32,19 @@ const calculatePAYE = (taxableIncome) => {
 const calculateNSSF = (basicSalary) => {
     let tier1_cap = 7000;
     let tier2_cap = 36000;
-    let totalNSSF = 0;
     const nssf_rate = 0.06;
+    let tier1_deduction = 0;
+    let tier2_deduction = 0;
 
-    let tier1_deduction = Math.min(basicSalary, tier1_cap) * nssf_rate;
-    totalNSSF += tier1_deduction;
-
+    tier1_deduction = Math.min(basicSalary, tier1_cap) * nssf_rate;
+    
     if (basicSalary > tier1_cap) {
-        let tier2_deduction = Math.min(basicSalary - tier1_cap, tier2_cap - tier1_cap) * nssf_rate;
-        totalNSSF += tier2_deduction;
+        tier2_deduction = Math.min(basicSalary - tier1_cap, tier2_cap - tier1_cap) * nssf_rate;
     }
     
-    // Note: The new NSSF Act (2013) contribution is tax-deductible for PAYE.
-    // The calculation above is for the total contribution, half from employer and half from employee.
-    // However, for payroll, we just need the employee's portion. The law is 6% of pensionable earnings for each.
-    return totalNSSF;
+    // The total contribution is tax-deductible for PAYE.
+    // The law is 6% of pensionable earnings for each.
+    return { tier1: tier1_deduction, tier2: tier2_deduction, total: tier1_deduction + tier2_deduction };
 };
 
 // SHIF (NHIF) Contributions (New rates as of SHIF Act 2023)
@@ -54,9 +52,10 @@ const calculateSHIF = (grossSalary) => {
     return grossSalary * 0.0275; // Flat rate of 2.75% of gross pay
 };
 
-// Housing Levy
+// Housing Levy with rounding
 const calculateHousingLevy = (grossSalary) => {
-    return grossSalary * 0.015; // 1.5% of gross pay
+    const levy = grossSalary * 0.015;
+    return Math.round(levy);
 };
 
 // --- Main Payroll Functions ---
@@ -91,8 +90,21 @@ export const calculatePayroll = async (req, res) => {
             await supabase.from('payroll_runs').delete().eq('id', existingRun.id);
             await supabase.from('payroll_details').delete().eq('payroll_run_id', existingRun.id);
         }
+        
+        // 2. Generate a unique payroll number for documents
+        const { count, error: countError } = await supabase
+            .from('payroll_runs')
+            .select('*', { count: 'exact', head: true })
+            .eq('company_id', companyId)
+            .eq('payroll_month', month)
+            .eq('payroll_year', year);
 
-        // 2. Fetch all active employees for the company
+        if (countError) throw new Error('Failed to count previous payroll runs.');
+        
+        const payrollCount = count || 0;
+        const payrollNumber = `PR-${year}-${String(month).padStart(2, '0')}-${String(payrollCount + 1).padStart(3, '0')}`;
+        
+        // 3. Fetch all active employees for the company
         const { data: employees, error: employeesError } = await supabase
             .from('employees')
             .select('*')
@@ -103,10 +115,18 @@ export const calculatePayroll = async (req, res) => {
         if (employees.length === 0) {
             return res.status(404).json({ message: 'No active employees found.' });
         }
+        
+        // 4. Fetch all employee bank details
+        const { data: bankDetails, error: bankDetailsError } = await supabase
+            .from('employee_bank_details')
+            .select('*')
+            .in('employee_id', employees.map(emp => emp.id));
+            
+        if (bankDetailsError) throw new Error('Failed to fetch employee bank details.');
+        const bankDetailsMap = new Map(bankDetails.map(item => [item.employee_id, item]));
 
-        // 3. Create a new payroll run entry
+        // 5. Create a new payroll run entry
         const payrollRunId = uuidv4();
-        const payrollNumber = `${companyId}-${year}-${month}`;
 
         await supabase.from('payroll_runs').insert({
             id: payrollRunId,
@@ -124,19 +144,19 @@ export const calculatePayroll = async (req, res) => {
         let totalPaye = 0;
         let totalNetPay = 0;
 
-        // 4. Loop through each employee and calculate payroll
+        // 6. Loop through each employee and calculate payroll
         for (const employee of employees) {
             let basicSalary = parseFloat(employee.salary);
             let totalAllowances = 0;
             let totalNonCashBenefits = 0;
-            let totalDeductions = 0;
-            let totalStatutoryDeductionsPerEmployee = 0;
             let totalCustomDeductions = 0;
+            let allowancesDetails = [];
+            let deductionsDetails = [];
 
             // Fetch allowances for the employee or their department
             const { data: allowances, error: allowancesError } = await supabase
                 .from('allowances')
-                .select(`*, allowance_type:allowance_type_id (is_cash, is_taxable)`)
+                .select(`*, allowance_type:allowance_type_id (name, is_cash, is_taxable)`)
                 .or(`employee_id.eq.${employee.id},department_id.eq.${employee.department_id}`)
                 .eq('is_active', true)
                 .or(`end_date.is.null,end_date.gte.${new Date().toISOString().split('T')[0]}`)
@@ -157,12 +177,19 @@ export const calculatePayroll = async (req, res) => {
                 } else {
                     totalNonCashBenefits += allowanceValue;
                 }
+                
+                allowancesDetails.push({
+                    name: allowance.name,
+                    value: allowanceValue,
+                    is_cash: allowance.allowance_type.is_cash,
+                    is_taxable: allowance.allowance_type.is_taxable
+                });
             }
             
             // Fetch custom deductions for the employee or their department
             const { data: deductions, error: deductionsError } = await supabase
                 .from('deductions')
-                .select(`*, deduction_type:deduction_type_id (is_tax_deductible)`)
+                .select(`*, deduction_type:deduction_type_id (name, is_tax_deductible)`)
                 .or(`employee_id.eq.${employee.id},department_id.eq.${employee.department_id}`)
                 .eq('is_active', true)
                 .or(`end_date.is.null,end_date.gte.${new Date().toISOString().split('T')[0]}`)
@@ -178,11 +205,18 @@ export const calculatePayroll = async (req, res) => {
                     deductionValue = basicSalary * (parseFloat(deduction.value) / 100);
                 }
                 totalCustomDeductions += deductionValue;
+                
+                deductionsDetails.push({
+                    name: deduction.name,
+                    value: deductionValue,
+                    is_tax_deductible: deduction.deduction_type.is_tax_deductible
+                });
             }
             
             // Calculate statutory deductions
             let grossPay = basicSalary + totalAllowances;
-            let nssfDeduction = employee.pays_nssf ? calculateNSSF(basicSalary) : 0;
+            let nssfTiers = employee.pays_nssf ? calculateNSSF(basicSalary) : { tier1: 0, tier2: 0, total: 0 };
+            let nssfDeduction = nssfTiers.total;
             let shifDeduction = employee.shif_number ? calculateSHIF(grossPay) : 0;
             let housingLevyDeduction = employee.pays_housing_levy ? calculateHousingLevy(grossPay) : 0;
 
@@ -196,10 +230,10 @@ export const calculatePayroll = async (req, res) => {
                     .from('helb_deductions')
                     .select('monthly_deduction')
                     .eq('employee_id', employee.id)
-                    .single();
+                    .maybeSingle();
                 
                 if (helbError) throw new Error('Failed to fetch HELB details.');
-                helbDeduction = parseFloat(helbData.monthly_deduction);
+                helbDeduction = helbData ? parseFloat(helbData.monthly_deduction) : 0;
             }
             
             let payeTax = employee.pays_paye ? calculatePAYE(taxableIncome) : 0;
@@ -207,7 +241,21 @@ export const calculatePayroll = async (req, res) => {
             totalStatutoryDeductionsPerEmployee = nssfDeduction + shifDeduction + housingLevyDeduction + helbDeduction + payeTax;
             totalDeductions = totalStatutoryDeductionsPerEmployee + totalCustomDeductions;
             
-            let netPay = grossPay - totalDeductions + totalNonCashBenefits;
+            let netPay = grossPay + totalNonCashBenefits - totalDeductions;
+            
+            // Get employee payment details
+            const employeeBankDetails = bankDetailsMap.get(employee.id);
+            let paymentMethod = null;
+            let bankName = null;
+            let accountName = null;
+            let mpesaPhone = null;
+
+            if (employeeBankDetails) {
+                paymentMethod = employeeBankDetails.payment_method;
+                bankName = employeeBankDetails.bank_name || null;
+                accountName = employeeBankDetails.account_name || null;
+                mpesaPhone = employeeBankDetails.mpesa_phone || null;
+            }
 
             // Add payroll details for this employee
             payrollDetailsToInsert.push({
@@ -222,10 +270,18 @@ export const calculatePayroll = async (req, res) => {
                 taxable_income: taxableIncome,
                 paye_tax: payeTax,
                 nssf_deduction: nssfDeduction,
+                nssf_tier1_deduction: nssfTiers.tier1,
+                nssf_tier2_deduction: nssfTiers.tier2,
                 shif_deduction: shifDeduction,
                 helb_deduction: helbDeduction,
                 housing_levy_deduction: housingLevyDeduction,
                 net_pay: netPay,
+                payment_method: paymentMethod,
+                bank_name: bankName,
+                account_name: accountName,
+                mpesa_phone: mpesaPhone,
+                allowances_details: allowancesDetails,
+                deductions_details: deductionsDetails
             });
 
             totalGrossPay += grossPay;
@@ -234,10 +290,10 @@ export const calculatePayroll = async (req, res) => {
             totalNetPay += netPay;
         }
 
-        // 5. Insert all payroll details at once
+        // 7. Insert all payroll details at once
         await supabase.from('payroll_details').insert(payrollDetailsToInsert);
 
-        // 6. Update the payroll run with totals
+        // 8. Update the payroll run with totals
         await supabase.from('payroll_runs').update({
             total_gross_pay: totalGrossPay,
             total_statutory_deductions: totalStatutoryDeductions,
@@ -376,4 +432,3 @@ export const cancelPayrollRun = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
-
