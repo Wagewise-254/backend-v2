@@ -52,7 +52,7 @@ export const getDeductions = async (req, res) => {
 
     const { data, error } = await supabase
       .from('deductions')
-      .select('*, deduction_types(name, is_tax_deductible), employees(first_name, last_name)')
+      .select('*, deduction_types(name, is_tax_deductible), employees(first_name, last_name), departments(name)')
       .eq('company_id', companyId);
     if (error) throw error;
     res.json(data);
