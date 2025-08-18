@@ -1,7 +1,7 @@
 import supabase from '../libs/supabaseClient.js';
 
 // Helper function to check for company ownership
-const checkCompanyOwnership = async (companyId, userId) => {
+export const checkCompanyOwnership = async (companyId, userId) => {
   const { data: company, error } = await supabase
     .from('companies')
     .select('id')

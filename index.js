@@ -5,13 +5,15 @@ import dotenv from 'dotenv';
 import  sendEmail  from './services/email.js'; 
 import companyRoutes from './routes/companyRoutes.js'
 import hrRoutes from './routes/hrRoutes.js';
-import payrollRoutes from './routes/payrollRoutes.js';
+//import payrollRoutes from './routes/payrollRoutes.js';
 import helbRoutes from './routes/helbRoutes.js';
 import statutoryRoutes from './routes/statutoryRoutes.js';
 import allowanceRoutes from './routes/allowanceRoutes.js';
 import allowanceTypeRoutes from './routes/allowanceTypeRoutes.js';
 import deductionRoutes from './routes/deductionRoutes.js';
 import deductionTypeRoutes from './routes/deductionTypeRoutes.js';
+import payrollRoutes from './routes/payrollRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js'; 
 
 dotenv.config();
 
@@ -73,6 +75,12 @@ app.use('/api/companies/:companyId/', helbRoutes);
 
 // Mount statutory routes
 app.use('/api/companies/:companyId', statutoryRoutes);
+
+// Use Payroll-related routes (e.g., /api/company/:companyId/payroll/runs)
+app.use('/api/company/:companyId', payrollRoutes); // Use the new routes
+
+// Mount the new dashboard routes
+app.use('/api/company/:companyId', dashboardRoutes);
 
 
 
