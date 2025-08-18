@@ -1,6 +1,7 @@
 // backend/controllers/payrollController.js
 
 import supabase from '../libs/supabaseClient.js';
+import { getPayslipEmailTemplate} from '../services/email.js';
 import { v4 as uuidv4 } from "uuid";
 
 // --- Helper Functions for Kenyan Statutory Deductions ---
@@ -375,3 +376,4 @@ export const cancelPayrollRun = async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 };
+

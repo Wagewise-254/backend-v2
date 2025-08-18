@@ -6,7 +6,7 @@ import {
     completePayrollRun, 
     getPayrollRuns,
     getPayrollDetails,
-    cancelPayrollRun
+    cancelPayrollRun,
 } from '../controllers/payrollController.js';
 import verifyToken from '../middleware/auth.js';
 

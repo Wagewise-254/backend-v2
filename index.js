@@ -2,7 +2,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import  sendEmail  from './services/email.js'; 
+import  {sendEmail, getPayslipEmailTemplate}  from './services/email.js'; 
 import companyRoutes from './routes/companyRoutes.js'
 import hrRoutes from './routes/hrRoutes.js';
 //import payrollRoutes from './routes/payrollRoutes.js';
@@ -13,13 +13,15 @@ import allowanceTypeRoutes from './routes/allowanceTypeRoutes.js';
 import deductionRoutes from './routes/deductionRoutes.js';
 import deductionTypeRoutes from './routes/deductionTypeRoutes.js';
 import payrollRoutes from './routes/payrollRoutes.js';
-import dashboardRoutes from './routes/dashboardRoutes.js'; 
+import dashboardRoutes from './routes/dashboardRoutes.js';
+import multer from 'multer'
 
 dotenv.config();
 
 const app = express();
 app.use(cors()); // Allow requests from your frontend
 app.use(express.json());
+const upload = multer();
 
 app.get('/', (req, res) => {
     res.send('WageWise Backend is running!');
@@ -53,6 +55,7 @@ app.post('/api/welcome-email', async (req, res) => {
     }
 });
 
+// New endpoint to send payslip email with attachment
 // Use the new company routes
 app.use('/api/companies', companyRoutes);
 
@@ -60,7 +63,7 @@ app.use('/api/companies', companyRoutes);
 app.use('/api/company', hrRoutes);
 
 // Use Payroll-related routes (e.g., /api/company/:companyId/payroll/runs)
-app.use('/api/company', payrollRoutes);
+//app.use('/api/company', payrollRoutes);
 
 // Use Allowance routes
 app.use('/api/company', allowanceRoutes);
