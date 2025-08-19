@@ -30,8 +30,8 @@ const calculatePAYE = (taxableIncome) => {
 
 // NSSF Tiered Contribution (New rates)
 const calculateNSSF = (basicSalary) => {
-    let tier1_cap = 7000;
-    let tier2_cap = 36000;
+    let tier1_cap = 8000;
+    let tier2_cap = 72000;
     const nssf_rate = 0.06;
     let tier1_deduction = 0;
     let tier2_deduction = 0;
@@ -49,7 +49,8 @@ const calculateNSSF = (basicSalary) => {
 
 // SHIF (NHIF) Contributions (New rates as of SHIF Act 2023)
 const calculateSHIF = (grossSalary) => {
-    return grossSalary * 0.0275; // Flat rate of 2.75% of gross pay
+   const shif = grossSalary * 0.0275; // Flat rate of 2.75% of gross pay
+   return Math.round(shif);
 };
 
 // Housing Levy with rounding
@@ -221,7 +222,7 @@ export const calculatePayroll = async (req, res) => {
             let housingLevyDeduction = employee.pays_housing_levy ? calculateHousingLevy(grossPay) : 0;
 
             // Calculate taxable income
-            let taxableIncome = grossPay - nssfDeduction;
+            
             let helbDeduction = 0;
 
             // Handle HELB
@@ -235,11 +236,13 @@ export const calculatePayroll = async (req, res) => {
                 if (helbError) throw new Error('Failed to fetch HELB details.');
                 helbDeduction = helbData ? parseFloat(helbData.monthly_deduction) : 0;
             }
+
+            let taxableIncome = grossPay - nssfDeduction - shifDeduction - housingLevyDeduction - helbDeduction - totalCustomDeductions;
             
             let payeTax = employee.pays_paye ? calculatePAYE(taxableIncome) : 0;
             
-            totalStatutoryDeductionsPerEmployee = nssfDeduction + shifDeduction + housingLevyDeduction + helbDeduction + payeTax;
-            totalDeductions = totalStatutoryDeductionsPerEmployee + totalCustomDeductions;
+            let totalStatutoryDeductionsPerEmployee = nssfDeduction + shifDeduction + housingLevyDeduction + helbDeduction + payeTax;
+            let totalDeductions = totalStatutoryDeductionsPerEmployee + totalCustomDeductions;
             
             let netPay = grossPay + totalNonCashBenefits - totalDeductions;
             
