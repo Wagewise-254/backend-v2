@@ -75,7 +75,7 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
     const employeeFullName = `${employeeData.first_name || ''} ${employeeData.other_names || ''} ${employeeData.last_name || ''}`.trim();
     const personal_relief = 2400.00;
     const gross_tax = detail.paye_tax + personal_relief || 0.00;
-    const allowable_deductions = detail.total_deductions - detail.paye_tax || 0.00;
+    const allowable_deductions = detail.total_statutory_deductions - detail.paye_tax || 0.00;
     const total_gross_pay = detail.gross_pay + detail.total_non_cash_benefits || 0.00;
 
     const margin = doc.page.margins.left;

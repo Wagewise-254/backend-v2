@@ -3,6 +3,7 @@ import supabase from '../libs/supabaseClient.js';
 import { Parser } from 'json2csv';
 import ExcelJS from 'exceljs';
 import PDFDocument from 'pdfkit';
+import { stringify } from 'csv-stringify';
 
 // Helper function to fetch payroll details for a given run
 const fetchPayrollData = async (companyId, runId) => {
@@ -62,6 +63,7 @@ export const generateReport = async (req, res) => {
             case 'kra-sec-b1':
                 // Call KRA file generation logic
                 const kraCsv = generateKraSecB1(payrollData);
+                res.setHeader('extension', 'csv')
                 res.setHeader('Content-Type', 'text/csv');
                 res.setHeader('Content-Disposition', `attachment; filename="KRA_SEC_B1_${runId}.csv"`);
                 res.send(kraCsv);
@@ -205,40 +207,43 @@ const generateKraSecB1 = (data) => {
         let resident_status = (record.employee.citizenship.toLowerCase() !== 'kenyan') ? 'Non-Resident' : 'Resident';
         let employee_type = (record.employee.employee_type.toLowerCase() !== 'primary') ? 'Secondary Employee' : 'Primary Employee';
 
-        return {
-            'KRA PIN': record.employee.krapin,
-            'Employee Name': `${record.employee.first_name} ${record.employee.other_names || ''} ${record.employee.last_name}`.trim(),
-            'Resident Status': resident_status,
-            'Employee Type': employee_type,
-            'Basic Salary': formatCurrency(record.basic_salary),
-            'Housing Allowance': formatCurrency(getAllowanceValue('housing')),
-            'Transport Allowance': formatCurrency(getAllowanceValue('transport')),
-            'Leave Pay': formatCurrency(getAllowanceValue('leave pay')),
-            'Overtime Allowance': formatCurrency(getAllowanceValue('overtime')),
-            'Director Fee': formatCurrency(getAllowanceValue('director fee')),
-            'Lump Sum': '0.00',
-            'Other Allowances': formatCurrency(otherAllowances),
-            'Blank1': '', // Blank
-            'Car Benefit': formatCurrency(getAllowanceValue('car benefit')),
-            'Total Non-Cash Benefits': formatCurrency(record.total_non_cash_benefits),
-            'Blank2': '', // Blank
-            'Meals Benefit': formatCurrency(getAllowanceValue('meals benefit')),
-            'Type of Housing': 'Benefit not given',
-            'Blank3': '', 'Blank4': '', 'Blank5': '', 'Blank6': '', 'Blank7': '',
-            'SHIF Deduction': formatCurrency(record.shif_deduction),
-            'NSSF Deduction': formatCurrency(record.nssf_deduction),
-            'Blank8': '',
-            'Blank9': '',
-            'Housing Levy': formatCurrency(record.housing_levy_deduction),
-            'Blank10': '', 'Blank11': '', 'Blank12': '',
-            'Monthly Personal Relief': '2400.00',
-            'Blank13': '', 'Blank14': '',
-            'PAYE Tax': formatCurrency(record.paye_tax)
-        };
+        return [
+             record.employee.krapin || '',
+             `${record.employee.first_name || ''} ${record.employee.other_names || ''} ${record.employee.last_name || ''}`.trim(),
+              resident_status || 'Resident',
+              employee_type || 'Primary Employee',
+              formatCurrency(record.basic_salary || 0),
+              formatCurrency(getAllowanceValue('housing')),
+              formatCurrency(getAllowanceValue('transport')),
+              formatCurrency(getAllowanceValue('leave pay')),
+              formatCurrency(getAllowanceValue('overtime')),
+              formatCurrency(getAllowanceValue('director fee')),
+             '0.00',
+              formatCurrency(otherAllowances),
+             '', // Blank
+              formatCurrency(getAllowanceValue('car benefit')),
+              formatCurrency(record.total_non_cash_benefits),
+              '', // Blank
+              formatCurrency(getAllowanceValue('meals benefit')),
+              'Benefit not given',
+             '',  '',  '', '',  '',
+             formatCurrency(record.shif_deduction),
+             formatCurrency(record.nssf_deduction),
+             '',
+             '',
+             formatCurrency(record.housing_levy_deduction),
+             '',  '',  '',
+             '2400.00',
+             '',  '',
+             formatCurrency(record.paye_tax)
+        ];
     });
-
-    const json2csvParser = new Parser({ fields });
-    return json2csvParser.parse(kraRecords);
+    return new Promise((resolve, reject) => {
+        stringify(kraRecords, { header: false}, (err, result) => {
+            if (err) reject(err)
+            else resolve(result)
+        })
+    });
 };
 
 // Function to generate NSSF Return file (Excel)
@@ -295,12 +300,16 @@ const generateShifReturn = async (data) => {
 
 const generateHousingLevyReturn = (data) => {
     const records = data.map(record => [
-        record.employee.id_number,
-        `${record.employee.first_name} ${record.employee.other_names || ''} ${record.employee.last_name}`.trim(),
-        record.employee.krapin,
-        formatCurrency(record.housing_levy_deduction)
-    ].join(','));
-    return records.join('\n');
+        record.employee.id_number || '',
+        `${record.employee.first_name || ''} ${record.employee.other_names || ''} ${record.employee.last_name || ''}`.trim(),
+        record.employee.krapin || '',
+        formatCurrency(record.housing_levy_deduction || 0)
+    ]);
+    return new Promise((resolve, reject) =>{
+        stringify(records, {header: false }, (err, result) => {
+            if (err) reject(err); else resolve(Buffer.from(result, 'utf-8'));
+        })
+    });
 };
 
 const generateHelbReport = async (data) => {
@@ -328,22 +337,34 @@ const generateBankPaymentFile = (data) => {
         `${record.employee.first_name} ${record.employee.other_names || ''} ${record.employee.last_name}`.trim(),
         record.account_name,
         // Bank code and branch code not in payroll_details, assuming these are placeholders
-        '',
+        record.employee_bank_details.bank_code,
         '',
         formatCurrency(record.net_pay),
         `Payroll Ref ${record.payroll_run.payroll_number}`
-    ].join(','));
-    return ['"full names","account number","bank code","branch code","amount","reference"', ...records].join('\n');
+    ]);
+    const columns = ["full names","account number","bank code","branch code","amount","reference"]
+    return new Promise((resolve, reject) => {
+        stringify(records, {header:true, columns: columns}, (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+        })
+    });
 };
 
 const generateMpesaPaymentFile = (data) => {
-    const records = data.filter(r => r.payment_method?.toLowerCase() === 'mpesa').map(record => [
+    const records = data.filter(r => r.payment_method?.toLowerCase() === 'm-pesa').map(record => [
         `${record.employee.first_name} ${record.employee.other_names || ''} ${record.employee.last_name}`.trim(),
         record.mpesa_phone,
         formatCurrency(record.net_pay),
         `Payroll Ref ${record.payroll_run.payroll_number}`
-    ].join(','));
-    return ['"fullname","mpesa phone number","amount","reference"', ...records].join('\n');
+    ]);
+    const columns = ["fullname","mpesa phone number","amount","reference"]
+    return new Promise((resolve, reject) => {
+        stringify(records, {header: true, columns: columns}, (err, result) => {
+            if (err) reject(err);
+            else resolve(result);
+        })
+    });
 };
 
 const generateCashPaymentSheet = async (data) => {
