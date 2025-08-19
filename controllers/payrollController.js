@@ -256,8 +256,8 @@ export const calculatePayroll = async (req, res) => {
             if (employeeBankDetails) {
                 paymentMethod = employeeBankDetails.payment_method;
                 bankName = employeeBankDetails.bank_name || null;
-                accountName = employeeBankDetails.account_name || null;
-                mpesaPhone = employeeBankDetails.mpesa_phone || null;
+                accountName = employeeBankDetails.account_number || null;
+                mpesaPhone = employeeBankDetails.phone_number || null;
             }
 
             // Add payroll details for this employee

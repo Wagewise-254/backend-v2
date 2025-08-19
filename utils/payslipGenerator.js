@@ -72,13 +72,18 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
     doc.on('error', reject);
 
     const companyName = companyDetails?.business_name || 'YOUR COMPANY';
-    const employeeFullName = `${employeeData.first_name || ''} ${employeeData.last_name || ''}`.trim();
+    const employeeFullName = `${employeeData.first_name || ''} ${employeeData.other_names || ''} ${employeeData.last_name || ''}`.trim();
+    const personal_relief = 2400.00;
+    const gross_tax = detail.paye_tax + personal_relief || 0.00;
+    const allowable_deductions = detail.total_deductions - detail.paye_tax || 0.00;
+    const total_gross_pay = detail.gross_pay + detail.total_non_cash_benefits || 0.00;
 
     const margin = doc.page.margins.left;
     const contentWidth = doc.page.width - margin * 2;
     let currentY = doc.page.margins.top;
 
-    // --- Logo (top-left) ---
+    // --- Logo (top-right) ---
+    let logoHeight = 0;
     if (companyDetails?.logo_url) {
       try {
         const logoResponse = await fetch(companyDetails.logo_url);
@@ -91,6 +96,7 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
       const logoY = currentY; // aligns with header top
 
       doc.image(logoBuffer, logoX, logoY, { width: logoWidth }); // scaled logo
+      logoHeight = 50;
         }
       } catch (e) {
         console.error('Logo fetch error:', e);
@@ -102,11 +108,15 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
     currentY += doc.currentLineHeight() * 1.1;
     doc.font('Helvetica-Bold').fontSize(11).text('PAYSLIP', { align: 'center' });
     currentY += doc.currentLineHeight() * 0.8;
+    // move "Printed on" just below logo
+const printedY = Math.max(currentY, logoHeight + doc.page.margins.top + 5);
     doc.font('Helvetica').fontSize(7).text(
       `PRINTED ON ${new Date().toLocaleDateString('en-GB').toUpperCase()}`,
+      0, printedY,
       { align: 'right' }
     );
-    currentY += doc.currentLineHeight() * 1.8;
+
+    currentY = printedY + doc.currentLineHeight() * 1.8;
 
     // --- Employee Details ---
     const empLineHeight = 10;
@@ -146,7 +156,7 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
       }
     }
 
-    currentY = drawLineItem(doc, 'GROSS PAY', formatCurrency(detail.gross_pay), currentY, margin, contentWidth, true);
+    currentY = drawLineItem(doc, 'GROSS PAY', formatCurrency(total_gross_pay), currentY, margin, contentWidth, true);
     currentY += empLineHeight * 1.2;
 
     // --- TAXATION ---
@@ -157,14 +167,14 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
     if (detail.taxable_income) {
       currentY = drawLineItem(doc, 'Taxable Pay', formatCurrency(detail.taxable_income), currentY, margin, contentWidth, true);
     }
-    if (detail.allowable_deductions) {
-      currentY = drawLineItem(doc, 'Allowable Deductions', formatCurrency(detail.allowable_deductions), currentY, margin, contentWidth);
+    if (allowable_deductions) {
+      currentY = drawLineItem(doc, 'Allowable Deductions', formatCurrency(allowable_deductions), currentY, margin, contentWidth);
     }
-    if (detail.gross_tax) {
-      currentY = drawLineItem(doc, 'Gross Tax', formatCurrency(detail.gross_tax), currentY, margin, contentWidth);
+    if (gross_tax) {
+      currentY = drawLineItem(doc, 'Gross Tax', formatCurrency(gross_tax), currentY, margin, contentWidth);
     }
-    if (detail.personal_relief) {
-      currentY = drawLineItem(doc, 'Monthly Personal Relief', formatCurrency(detail.personal_relief), currentY, margin, contentWidth);
+    if (personal_relief) {
+      currentY = drawLineItem(doc, 'Monthly Personal Relief', formatCurrency(personal_relief), currentY, margin, contentWidth);
     }
     currentY += empLineHeight * 1.2;
 
@@ -180,7 +190,7 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
     currentY = drawLineItem(doc, 'SHIF', formatCurrency(detail.shif_deduction), currentY, margin, contentWidth);
     currentY = drawLineItem(doc, 'Housing Levy', formatCurrency(detail.housing_levy_deduction), currentY, margin, contentWidth);
     if (parseFloat(detail.helb_deduction) > 0) {
-      currentY = drawLineItem(doc, 'HELB Deduction', formatCurrency(detail.helb_deduction), currentY, margin, contentWidth);
+      currentY = drawLineItem(doc, 'Student Loan(HELB)', formatCurrency(detail.helb_deduction), currentY, margin, contentWidth);
     }
 
     if (detail.deductions_details) {

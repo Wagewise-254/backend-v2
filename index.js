@@ -15,6 +15,7 @@ import deductionTypeRoutes from './routes/deductionTypeRoutes.js';
 import payrollRoutes from './routes/payrollRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import payslipRoutes from './routes/payslipRoutes.js';
+import reportsRoutes from './routes/reportsRoutes.js';
 import multer from 'multer'
 
 dotenv.config();
@@ -86,6 +87,8 @@ app.use('/api/company/:companyId', payrollRoutes); // Use the new routes
 // Mount the new dashboard routes
 app.use('/api/company/:companyId', dashboardRoutes);
 app.use('/api/company/:companyId/payroll/payslip', payslipRoutes);
+app.use('/api/company/:companyId/payroll/runs', reportsRoutes);
+
 
 
 

@@ -21,6 +21,7 @@ export const generatePayslipPdf = async (req, res) => {
           employee_number,
           first_name,
           last_name,
+          other_names,
           krapin,
           nssf_number,
           shif_number
