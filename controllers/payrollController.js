@@ -267,7 +267,7 @@ export const calculatePayroll = async (req, res) => {
       // Calculate statutory deductions
       let grossPay = basicSalary + totalAllowances;
       let nssfTiers = employee.pays_nssf
-        ? calculateNSSF(basicSalary)
+        ? calculateNSSF(grossPay)
         : { tier1: 0, tier2: 0, total: 0 };
       let nssfDeduction = nssfTiers.total;
       let shifDeduction = employee.shif_number ? calculateSHIF(grossPay) : 0;
