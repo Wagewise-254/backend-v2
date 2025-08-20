@@ -62,11 +62,10 @@ export const generateReport = async (req, res) => {
         switch (reportType) {
             case 'kra-sec-b1':
                 // Call KRA file generation logic
-                const kraCsv = generateKraSecB1(payrollData);
-                res.setHeader('extension', 'csv')
-                res.setHeader('Content-Type', 'text/csv');
+                const kraCsv = await generateKraSecB1(payrollData);
+                res.setHeader('Content-Type', 'text/csv; charset=utf-8');
                 res.setHeader('Content-Disposition', `attachment; filename="KRA_SEC_B1_${runId}.csv"`);
-                res.send(kraCsv);
+                  res.end(Buffer.from(kraCsv, 'utf-8'));
                 break;
             case 'nssf-return':
                 // Call NSSF file generation logic
@@ -82,10 +81,10 @@ export const generateReport = async (req, res) => {
                 res.send(shifExcelBuffer);
                 break;
             case 'housing-levy-return':
-                const housingLevyCsv = generateHousingLevyReturn(payrollData);
-                res.setHeader('Content-Type', 'text/csv');
+                const housingLevyCsv = await generateHousingLevyReturn(payrollData);
+                res.setHeader('Content-Type', 'text/csv; charset=utf-8');
                 res.setHeader('Content-Disposition', `attachment; filename="Housing_Levy_${runId}.csv"`);
-                res.send(housingLevyCsv);
+                res.end(Buffer.from(housingLevyCsv, 'utf-8'));
                 break;
             case 'helb-report':
                 const helbExcelBuffer = await generateHelbReport(payrollData);
@@ -94,16 +93,16 @@ export const generateReport = async (req, res) => {
                 res.send(helbExcelBuffer);
                 break;
             case 'bank-payment':
-                const bankCsv = generateBankPaymentFile(payrollData);
-                res.setHeader('Content-Type', 'text/csv');
+                const bankCsv = await generateBankPaymentFile(payrollData);
+                res.setHeader('Content-Type', 'text/csv; charset=utf-8');
                 res.setHeader('Content-Disposition', `attachment; filename="Bank_Payments_${runId}.csv"`);
-                res.send(bankCsv);
+                res.end(Buffer.from(bankCsv, 'utf-8'));
                 break;
             case 'mpesa-payment':
-                const mpesaCsv = generateMpesaPaymentFile(payrollData);
-                res.setHeader('Content-Type', 'text/csv');
+                const mpesaCsv = await generateMpesaPaymentFile(payrollData);
+                res.setHeader('Content-Type', 'text/csv; charset=utf-8');
                 res.setHeader('Content-Disposition', `attachment; filename="M-Pesa_Payments_${runId}.csv"`);
-                res.send(mpesaCsv);
+                res.end(Buffer.from(mpesaCsv, 'utf-8'))
                 break;
             case 'cash-payment':
                 const cashPdfBuffer = await generateCashPaymentSheet(payrollData);
@@ -307,7 +306,7 @@ const generateHousingLevyReturn = (data) => {
     ]);
     return new Promise((resolve, reject) =>{
         stringify(records, {header: false }, (err, result) => {
-            if (err) reject(err); else resolve(Buffer.from(result, 'utf-8'));
+            if (err) reject(err); else resolve(result);
         })
     });
 };
@@ -337,7 +336,7 @@ const generateBankPaymentFile = (data) => {
         `${record.employee.first_name} ${record.employee.other_names || ''} ${record.employee.last_name}`.trim(),
         record.account_name,
         // Bank code and branch code not in payroll_details, assuming these are placeholders
-        record.employee_bank_details.bank_code,
+        '',
         '',
         formatCurrency(record.net_pay),
         `Payroll Ref ${record.payroll_run.payroll_number}`
