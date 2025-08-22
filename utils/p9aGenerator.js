@@ -35,24 +35,20 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
 
       // --- Header ---
       const headerContent = [
-        {
-          columns: [
-            { text: "P9A", style: "title", alignment: "left" },
-            {
-              text: "KENYA REVENUE AUTHORITY",
-              style: "kra",
-              alignment: "right",
-            },
-          ],
-        },
+        
         {
           image: logo || "assets/images/placeholder_logo.png",
-          width: 100,
+          width: 250,
           alignment: "center",
           margin: [0, 5, 0, 5],
         },
-        { text: "DOMESTIC TAXES DEPARTMENT", style: "header" },
+        { text: "DOMESTIC TAXES DEPARTMENT", style: "title", alignment: "center" },
         { text: `TAX DEDUCTION CARD YEAR: ${year}`, style: "header" },
+        {
+          columns: [
+            { text: "P9A", style: "kra", alignment: "left" },
+          ],
+        },
         {
           columns: [
             [
@@ -111,41 +107,54 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
       // --- Table header rows ---
       const tableBody = [
         [
-          { text: "MONTH", rowSpan: 2, style: "tableHeader" },
-          { text: "Basic Salary\nKshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "Benefits\nNon-Cash\nKshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "Value of\nQuarters\nKshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "Total Gross\nPay Kshs.", rowSpan: 2, style: "tableHeader" },
+          { text: "MONTH", rowSpan: 1, style: "tableHeader" },
+          { text: "Basic Salary\nKshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "Benefits\nNon-Cash\nKshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "Value of\nQuarters\nKshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "Total Gross\nPay Kshs.", rowSpan: 1, style: "tableHeader" },
           { text: "Defined Contribution Retirement", colSpan: 3, style: "tableHeader" }, {}, {},
-          { text: "Owner-\nOccupied\nInterest\nKshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "Retirement\nContribution &\nOwner\nOccupied\nInterest Kshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "Chargeable\nPay Kshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "Tax\nCharged\nKshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "Personal\nRelief +\nInsurance\nRelief Kshs.", rowSpan: 2, style: "tableHeader" },
-          { text: "PAYE Tax\n(J-K) Kshs.", rowSpan: 2, style: "tableHeader" },
+          { text: "Owner-\nOccupied\nInterest\nKshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "Retirement\nContribution &\nOwner\nOccupied\nInterest Kshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "Chargeable\nPay Kshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "Tax\nCharged\nKshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "Personal\nRelief +\nInsurance\nRelief Kshs.", rowSpan: 1, style: "tableHeader" },
+          { text: "PAYE Tax\n(J-K) Kshs.", rowSpan: 1, style: "tableHeader" },
+        ],
+        [
+          { text : "", rowSpan: 2,},{text : "A", rowSpan: 2, style: "tableHeader"},
+          {text : "B", rowSpan: 2, style: "tableHeader"},
+          {text : "C", rowSpan: 2, style: "tableHeader"},
+          {text : "D", rowSpan: 2, style: "tableHeader"},
+          {text : "E", colSpan: 3, style: "tableHeader"}, {}, {},
+          {text : "F\n Amount of\nInterest", rowSpan: 2, style: "tableHeader"},
+          {text : "G\nThe lowest\nof E added to\nF", rowSpan: 2, style: "tableHeader"},
+          {text : "H", rowSpan: 2, style: "tableHeader"},
+          {text : "J", rowSpan: 2, style: "tableHeader"},
+          {text : "K", style: "tableHeader"},
+          {text : "L", rowSpan: 2, style: "tableHeader"}
         ],
         [
           {},{},{},{},{},
           { text: "E1\n30% of A", style: "tableHeader" },
           { text: "E2\nActual", style: "tableHeader" },
           { text: "E3\nFixed", style: "tableHeader" },
-          {},{},{},{},{},{}
+          {},{},{},{},{text: "Total\nKshs.", style: "tableHeader"},{}
         ],
       ];
 
       // --- Table data rows ---
       sortedData.forEach((m) => {
         const salary = m.basic_salary || 0;
-        const benefits = m.total_non_cash_benefits || 0;
+        const benefits = (m.total_non_cash_benefits + m.total_allowances) || 0;
         const gross = m.gross_pay || 0;
         const e1 = salary * 0.3;
         const e2 = m.nssf_deduction || 0;
-        const e3 = 20000;
+        const e3 = 0;
         const f = 0;
-        const g = Math.min(e1, e2, e3) + f;
+        const g = Math.min(e1, e2) + f; // add the e3 later
         const h = m.taxable_income || 0;
-        const j = m.paye_tax || 0;
-        const k = 2595;
+        const j = (m.paye_tax + 2400) || 0;
+        const k = 2400;
         const l = Math.max(0, j - k);
 
         totals.salary += salary;
@@ -213,11 +222,11 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
             },
           ],
           [
-            { text: `TOTAL TAX (COL. L) Kshs. ${formatCurrency(totals.l)}`, style: "info", alignment: "right" },
+            { text: `TOTAL TAX (COL. L) Kshs. ${formatCurrency(totals.l)}`, style: "info" },
             { text: "\n\n" },
-            { text: "NAMES OF FINANCIAL INSTITUTION ADVANCING MORTGAGE LOAN", style: "small", margin: [0, 15, 0, 0] },
-            { text: "LR NO. OF OWNER OCCUPIED PROPERTY:....................", style: "small" },
-            { text: "DATE OF OCCUPATION OF HOUSE:....................", style: "small" },
+            { text: "NAMES OF FINANCIAL INSTITUTION ADVANCING MORTGAGE LOAN:", style: "small", margin: [0, 10, 0, 0] },
+            { text: "LR NO. OF OWNER OCCUPIED PROPERTY:....................", style: "small", margin: [0, 10, 0, 0] },
+            { text: "DATE OF OCCUPATION OF HOUSE:....................", style: "small",margin: [0, 10, 0, 0] },
           ],
         ],
       };
@@ -230,7 +239,7 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
           ...headerContent,
           {
             table: {
-              headerRows: 2,
+              headerRows: 3,
               body: tableBody,
               widths: [
                 "auto","*","*","*","*","*","*","*","*","*","*","*","*","*",

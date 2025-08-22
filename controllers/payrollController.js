@@ -266,6 +266,7 @@ export const calculatePayroll = async (req, res) => {
 
       // Calculate statutory deductions
       let grossPay = basicSalary + totalAllowances;
+      let totalGrossPay_withNonCash = grossPay + totalNonCashBenefits
       let nssfTiers = employee.pays_nssf
         ? calculateNSSF(grossPay)
         : { tier1: 0, tier2: 0, total: 0 };
@@ -328,7 +329,7 @@ export const calculatePayroll = async (req, res) => {
         total_non_cash_benefits: totalNonCashBenefits,
         total_deductions: totalDeductions,
         total_statutory_deductions: totalStatutoryDeductionsPerEmployee,
-        gross_pay: grossPay,
+        gross_pay: totalGrossPay_withNonCash,
         taxable_income: taxableIncome,
         paye_tax: payeTax,
         nssf_deduction: nssfDeduction,
