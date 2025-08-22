@@ -149,9 +149,9 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
         const gross = m.gross_pay || 0;
         const e1 = salary * 0.3;
         const e2 = m.nssf_deduction || 0;
-        const e3 = 0;
+        const e3 = 20000;
         const f = 0;
-        const g = Math.min(e1, e2) + f; // add the e3 later
+        const g = Math.min(e1, e2, e3) + f;
         const h = m.taxable_income || 0;
         const j = (m.paye_tax + 2400) || 0;
         const k = 2400;
