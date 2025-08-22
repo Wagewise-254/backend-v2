@@ -506,3 +506,39 @@ export const cancelPayrollRun = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+
+export const getP9PayrollYears = async (req, res) => {
+    try {
+        const { companyId } = req.params;
+
+        // Fetch all payroll runs for the company, regardless of status
+        const { data, error } = await supabase
+            .from('payroll_runs')
+            .select('payroll_year')
+            .eq('company_id', companyId);
+
+        if (error) {
+            console.error('Error fetching P9 payroll years:', error);
+            return res.status(500).json({ success: false, message: 'Failed to fetch P9 payroll years.' });
+        }
+
+        // Check if data is null or empty
+        if (!data || data.length === 0) {
+            return res.status(200).json({ success: true, message: 'No payroll years found.', data: [] });
+        }
+
+        // Extract and return only the unique years
+        const uniqueYears = [...new Set(data.map(item => item.payroll_year))].sort();
+
+        res.status(200).json({
+            success: true,
+            message: 'P9 payroll years fetched successfully.',
+            data: uniqueYears,
+        });
+
+    } catch (err) {
+        console.error('Unexpected error in getP9PayrollYears:', err);
+        res.status(500).json({ success: false, message: 'An unexpected error occurred.' });
+    }
+};

@@ -26,6 +26,7 @@
     "node-fetch": "^3.3.2",
     "nodemailer": "^7.0.5",
     "pdfkit": "^0.17.1",
+    "pdfmake": "^0.2.20",
     "uuid": "^11.1.0"
   }
 }

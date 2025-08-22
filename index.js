@@ -5,7 +5,6 @@ import dotenv from 'dotenv';
 import  {sendEmail, getPayslipEmailTemplate}  from './services/email.js'; 
 import companyRoutes from './routes/companyRoutes.js'
 import hrRoutes from './routes/hrRoutes.js';
-//import payrollRoutes from './routes/payrollRoutes.js';
 import helbRoutes from './routes/helbRoutes.js';
 import statutoryRoutes from './routes/statutoryRoutes.js';
 import allowanceRoutes from './routes/allowanceRoutes.js';
@@ -16,6 +15,7 @@ import payrollRoutes from './routes/payrollRoutes.js';
 import dashboardRoutes from './routes/dashboardRoutes.js';
 import payslipRoutes from './routes/payslipRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
+import p9aRoutes from './routes/p9aRoutes.js';
 import multer from 'multer'
 
 dotenv.config();
@@ -88,6 +88,8 @@ app.use('/api/company/:companyId', payrollRoutes); // Use the new routes
 app.use('/api/company/:companyId', dashboardRoutes);
 app.use('/api/company/:companyId/payroll/payslip', payslipRoutes);
 app.use('/api/company/:companyId/payroll/runs', reportsRoutes);
+// Mount the new P9A route under the company and employee context
+app.use('/api/companies/:companyId/employees', p9aRoutes);
 
 
 
