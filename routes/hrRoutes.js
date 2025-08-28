@@ -16,7 +16,8 @@ import {
     updateEmployeeStatus,
     updateEmployeeSalary,
     deleteEmployee,
-    importEmployees
+    importEmployees,
+    generateEmployeeTemplate
 } from '../controllers/employeeController.js';
 import { 
     getKenyanBanks, 
@@ -39,10 +40,12 @@ router.delete('/:companyId/departments/:departmentId', verifyToken, deleteDepart
 
 // Employee Routes
 router.get('/:companyId/employees', verifyToken, getEmployees);
+router.get('/:companyId/employees/template', verifyToken, generateEmployeeTemplate);
 router.get('/:companyId/employees/:employeeId', verifyToken, getEmployeeById);
 router.post('/:companyId/employees', verifyToken, addEmployee);
 router.put('/:companyId/employees/:employeeId', verifyToken, updateEmployee);
 router.post('/:companyId/employees/import', verifyToken, upload.single('file'), importEmployees);
+
 // Specific update routes for salary and status
 router.patch('/:companyId/employees/:employeeId/status', verifyToken, updateEmployeeStatus);
 router.patch('/:companyId/employees/:employeeId/salary', verifyToken, updateEmployeeSalary);

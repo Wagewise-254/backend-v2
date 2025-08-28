@@ -1,6 +1,53 @@
 // backend/controllers/employeeController.js
 import supabase from "../libs/supabaseClient.js";
-import { parse} from "xlsx";
+import ExcelJS from "exceljs";
+import pkg from 'xlsx';
+const { utils, read, SSF } = pkg;
+
+// -------------------- Helper Functions -------------------- //
+
+// Parse and validate date string (must be YYYY-MM-DD)
+function parseDate(dateStr, row, fieldName, errors) {
+  if (!dateStr) return null;
+
+  // Accept string or Excel date serial number
+  if (typeof dateStr === "number") {
+    // Excel serial number -> JS Date
+    const parsedDate = SSF.parse_date_code(dateStr);
+    if (!parsedDate) {
+      errors.push(`Row ${row}: Invalid date format for ${fieldName}.`);
+      return null;
+    }
+    const jsDate = new Date(parsedDate.y, parsedDate.m - 1, parsedDate.d);
+    return jsDate.toISOString().split("T")[0];
+  }
+
+  if (typeof dateStr === "string") {
+    const regex = /^\d{4}-\d{2}-\d{2}$/; // YYYY-MM-DD
+    if (!regex.test(dateStr)) {
+      errors.push(
+        `Row ${row}: Invalid date format for ${fieldName}. Use YYYY-MM-DD.`
+      );
+      return null;
+    }
+    return new Date(dateStr).toISOString().split("T")[0];
+  }
+
+  errors.push(`Row ${row}: Could not parse date for ${fieldName}.`);
+  return null;
+}
+
+// Normalize Yes/No → boolean
+function parseYesNo(value) {
+  if (!value) return false;
+  return value.toString().trim().toLowerCase() === "yes";
+}
+
+// Normalize No/Yes → inverted boolean (for fields like pays_paye)
+function parseNoDefaultYes(value) {
+  if (!value) return true; // default = yes
+  return value.toString().trim().toLowerCase() !== "no";
+}
 
 // Get all employees for a specific company
 export const getEmployees = async (req, res) => {
@@ -189,36 +236,36 @@ export const addEmployee = async (req, res) => {
       console.error("Insert employee error:", error);
       if (error.code === "23505") {
         // Unique violation error (e.g., employee_number, KRA PIN, ID number, email)
-        return res
-          .status(409)
-          .json({
-            error:
-              "An employee with similar unique details (Employee No., ID, KRA PIN, Email) already exists.",
-          });
+        return res.status(409).json({
+          error:
+            "An employee with similar unique details (Employee No., ID, KRA PIN, Email) already exists.",
+        });
       }
       throw new Error("Failed to add employee.");
     }
 
-   // Insert into employee_bank_details after successfully creating the employee
+    // Insert into employee_bank_details after successfully creating the employee
     const { data: bankData, error: bankError } = await supabase
-      .from('employee_bank_details')
+      .from("employee_bank_details")
       .insert([
         {
           employee_id: newEmployee.id, // Use the ID of the newly created employee
-          payment_method: 'Cash',
+          payment_method: "Cash",
         },
       ])
       .select()
       .single();
 
     if (bankError) {
-      console.error('Insert bank details error:', bankError);
-      return res.status(500).json({ error: 'Failed to add employee bank details' });
+      console.error("Insert bank details error:", bankError);
+      return res
+        .status(500)
+        .json({ error: "Failed to add employee bank details" });
     }
 
     res.status(201).json({ employee: newEmployee, bankDetails: bankData });
   } catch (error) {
-    console.error('Add employee controller error:', error);
+    console.error("Add employee controller error:", error);
     res.status(500).json({ error: error.message });
   }
 };
@@ -330,11 +377,9 @@ export const updateEmployee = async (req, res) => {
     if (error) {
       console.error("Update employee error:", error);
       if (error.code === "23505") {
-        return res
-          .status(409)
-          .json({
-            error: "An employee with similar unique details already exists.",
-          });
+        return res.status(409).json({
+          error: "An employee with similar unique details already exists.",
+        });
       }
       throw new Error("Failed to update employee.");
     }
@@ -380,11 +425,9 @@ export const updateEmployeeStatus = async (req, res) => {
       .single();
 
     if (companyError || !company) {
-      return res
-        .status(403)
-        .json({
-          error: "Unauthorized to update employee status for this company.",
-        });
+      return res.status(403).json({
+        error: "Unauthorized to update employee status for this company.",
+      });
     }
 
     const { data, error } = await supabase
@@ -443,11 +486,9 @@ export const updateEmployeeSalary = async (req, res) => {
       .single();
 
     if (companyError || !company) {
-      return res
-        .status(403)
-        .json({
-          error: "Unauthorized to update employee salary for this company.",
-        });
+      return res.status(403).json({
+        error: "Unauthorized to update employee salary for this company.",
+      });
     }
 
     const { data, error } = await supabase
@@ -523,159 +564,377 @@ export const deleteEmployee = async (req, res) => {
 };
 
 export const importEmployees = async (req, res) => {
-    const { companyId } = req.params;
-    const userId = req.userId;
+  const { companyId } = req.params;
+  const userId = req.userId;
 
-    if (!req.file) {
-        return res.status(400).json({ error: 'No file uploaded.' });
+  if (!req.file) {
+    return res.status(400).json({ error: "No file uploaded." });
+  }
+
+  try {
+    // Ensure user owns company
+    const { data: company, error: companyError } = await supabase
+      .from("companies")
+      .select("id")
+      .eq("id", companyId)
+      .eq("user_id", userId)
+      .single();
+
+    if (companyError || !company) {
+      return res
+        .status(403)
+        .json({ error: "Unauthorized to import employees to this company." });
     }
 
-    try {
-        // Ensure the user owns the company
-        const { data: company, error: companyError } = await supabase
-            .from("companies")
-            .select("id")
-            .eq("id", companyId)
-            .eq("user_id", userId)
-            .single();
+    // Get all departments for validation
+    const { data: departments, error: deptError } = await supabase
+      .from("departments")
+      .select("id, name")
+      .eq("company_id", companyId);
 
-        if (companyError || !company) {
-            return res.status(403).json({ error: "Unauthorized to import employees to this company." });
-        }
-
-        // Get all departments for validation
-        const { data: departments, error: departmentsError } = await supabase
-            .from("departments")
-            .select("id, name")
-            .eq("company_id", companyId);
-
-        if (departmentsError) {
-            console.error("Fetch departments error:", departmentsError);
-            return res.status(500).json({ error: "Failed to fetch departments for validation." });
-        }
-
-        const departmentMap = departments.reduce((acc, dept) => {
-            acc[dept.name.toLowerCase()] = dept.id;
-            return acc;
-        }, {});
-
-        const workbook = parse(req.file.buffer, { type: 'buffer' });
-        const sheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[sheetName];
-        const jsonData = parse(worksheet, { header: 1, raw: false }); // get data as an array of arrays
-
-        // Assuming the first row is headers, process from the second row
-        const headers = jsonData[0].map(h => h.trim());
-        const employeesToInsert = [];
-        const uniqueValues = { employee_number: new Set(), email: new Set(), id_number: new Set(), krapin: new Set() };
-        const errors = [];
-
-        for (let i = 1; i < jsonData.length; i++) {
-            const row = jsonData[i];
-            const employeeData = {};
-
-            headers.forEach((header, index) => {
-                const key = header.replace(/\s/g, '_').toLowerCase();
-                employeeData[key] = row[index];
-            });
-
-            // Basic validation and data mapping
-            if (!employeeData.employee_number || !employeeData.first_name || !employeeData.last_name || !employeeData.salary) {
-                errors.push(`Row ${i + 1}: Required fields (Employee Number, First Name, Last Name, Salary) are missing.`);
-                continue;
-            }
-
-            // Check for uniqueness
-            ['employee_number', 'email', 'id_number', 'krapin'].forEach(field => {
-                const value = employeeData[field];
-                if (value && uniqueValues[field].has(value)) {
-                    errors.push(`Row ${i + 1}: Duplicate value found for '${field}'.`);
-                } else if (value) {
-                    uniqueValues[field].add(value);
-                }
-            });
-
-            // Map department name to ID
-            const departmentName = employeeData.department?.toLowerCase();
-            const departmentId = departmentName ? departmentMap[departmentName] : null;
-
-            if (employeeData.department && !departmentId) {
-                errors.push(`Row ${i + 1}: Department '${employeeData.department}' not found.`);
-            }
-
-            // Clean up and format data for insertion
-            const employeeRecord = {
-                company_id: companyId,
-                department_id: departmentId,
-                employee_number: employeeData.employee_number.toString(),
-                first_name: employeeData.first_name,
-                last_name: employeeData.last_name,
-                other_names: employeeData.other_names || null,
-                email: employeeData.email || null,
-                phone: employeeData.phone || null,
-                date_of_birth: employeeData.date_of_birth ? new Date(employeeData.date_of_birth) : null,
-                gender: ['male', 'female', 'other'].includes(employeeData.gender?.toLowerCase()) ? employeeData.gender : null,
-                date_joined: employeeData.date_joined ? new Date(employeeData.date_joined) : new Date(),
-                job_title: employeeData.job_title || null,
-                job_type: ['full-time', 'part-time', 'contract', 'internship'].includes(employeeData.job_type?.toLowerCase()) ? employeeData.job_type : null,
-                employee_status: ['active', 'on leave', 'terminated', 'suspended'].includes(employeeData.employee_status?.toLowerCase()) ? employeeData.employee_status : 'Active',
-                employee_status_effective_date: employeeData.employee_status_effective_date ? new Date(employeeData.employee_status_effective_date) : new Date(),
-                id_type: ['national id', 'passport'].includes(employeeData.id_type?.toLowerCase()) ? employeeData.id_type : null,
-                id_number: employeeData.id_number?.toString() || null,
-                krapin: employeeData.krapin?.toString() || null,
-                shif_number: employeeData.shif_number?.toString() || null,
-                nssf_number: employeeData.nssf_number?.toString() || null,
-                citizenship: ['kenyan', 'non-kenyan'].includes(employeeData.citizenship?.toLowerCase()) ? employeeData.citizenship : null,
-                has_disability: employeeData.has_disability?.toLowerCase() === 'yes',
-                salary: parseFloat(employeeData.salary),
-                employee_type: ['primaryemployee', 'secondary employee'].includes(employeeData.employee_type?.toLowerCase()) ? employeeData.employee_type : null,
-                pays_paye: employeeData.pays_paye?.toLowerCase() === 'no' ? false : true,
-                pays_nssf: employeeData.pays_nssf?.toLowerCase() === 'no' ? false : true,
-                pays_helb: employeeData.pays_helb?.toLowerCase() === 'yes' ? true : false,
-                pays_housing_levy: employeeData.pays_housing_levy?.toLowerCase() === 'no' ? false : true,
-            };
-
-            employeesToInsert.push(employeeRecord);
-        }
-
-        if (errors.length > 0) {
-            return res.status(400).json({ error: 'Validation failed.', details: errors });
-        }
-
-        // Perform bulk insertion
-        const { data, error } = await supabase
-            .from("employees")
-            .insert(employeesToInsert)
-            .select();
-
-        if (error) {
-            console.error("Bulk insert employee error:", error);
-            if (error.code === "23505") { // Unique violation
-                return res.status(409).json({ error: "One or more employee unique details (Employee No., ID, KRA PIN, Email) already exist in the database." });
-            }
-            throw new Error("Failed to import employees.");
-        }
-
-        // Prepare bank details for insertion
-        const employeeBankDetailsToInsert = data.map(employee => ({
-            employee_id: employee.id,
-            payment_method: 'Cash',
-        }));
-
-        // Insert employee bank details
-        const { error: bankError } = await supabase
-            .from('employee_bank_details')
-            .insert(employeeBankDetailsToInsert);
-
-        if (bankError) {
-            console.error('Insert bulk bank details error:', bankError);
-            return res.status(500).json({ error: 'Failed to add employee bank details for some records.' });
-        }
-
-        res.status(201).json({ message: `${data.length} employees imported successfully.`, importedEmployees: data });
-
-    } catch (error) {
-        console.error('Import employees controller error:', error);
-        res.status(500).json({ error: error.message });
+    if (deptError) {
+      console.error("Fetch departments error:", deptError);
+      return res
+        .status(500)
+        .json({ error: "Failed to fetch departments for validation." });
     }
+
+    const departmentMap = departments.reduce((acc, d) => {
+      acc[d.name.toLowerCase()] = d.id;
+      return acc;
+    }, {});
+
+    // Parse Excel
+    const workbook = read(req.file.buffer, { type: "buffer" });
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    const jsonData = utils.sheet_to_json(worksheet, {
+      header: 1,
+      raw: true,
+      defval: null,
+    });
+
+    const headers = jsonData[0].map((h) => h.trim());
+    const employeesToInsert = [];
+    const errors = [];
+    const uniqueValues = {
+      employee_number: new Set(),
+      email: new Set(),
+      id_number: new Set(),
+      krapin: new Set(),
+    };
+
+    for (let i = 1; i < jsonData.length; i++) {
+      const row = jsonData[i];
+      if (!row || row.length === 0) continue;
+
+      const employeeData = {};
+      headers.forEach((header, index) => {
+        const key = header.replace(/\s/g, "_").toLowerCase();
+        employeeData[key] = row[index];
+      });
+
+      // Required fields
+      if (
+        !employeeData.employee_number ||
+        !employeeData.first_name ||
+        !employeeData.last_name ||
+        !employeeData.salary
+      ) {
+        errors.push(
+          `Row ${
+            i + 1
+          }: Missing required fields (Employee Number, First Name, Last Name, Salary).`
+        );
+        continue;
+      }
+
+      // Check uniqueness
+      ["employee_number", "email", "id_number"].forEach((field) => {
+        const val = employeeData[field];
+        if (val) {
+          if (uniqueValues[field].has(val)) {
+            errors.push(`Row ${i + 1}: Duplicate value for '${field}'.`);
+          } else {
+            uniqueValues[field].add(val);
+          }
+        }
+      });
+
+      // Correctly check for KRA PIN uniqueness using the correct key.
+      const kraPinVal = employeeData.kra_pin;
+      if (kraPinVal) {
+        if (uniqueValues.krapin.has(kraPinVal)) {
+          errors.push(`Row ${i + 1}: Duplicate value for 'kra_pin'.`);
+        } else {
+          uniqueValues.krapin.add(kraPinVal);
+        }
+      }
+
+      // Map department
+      let departmentId = null;
+      if (employeeData.department) {
+        const deptKey = employeeData.department.toLowerCase();
+        departmentId = departmentMap[deptKey];
+        if (!departmentId) {
+          errors.push(
+            `Row ${i + 1}: Department '${employeeData.department}' not found.`
+          );
+        }
+      }
+
+      // Build employee record
+      const record = {
+        company_id: companyId,
+        department_id: departmentId,
+        employee_number: employeeData.employee_number.toString(),
+        first_name: employeeData.first_name,
+        last_name: employeeData.last_name,
+        other_names: employeeData.other_names || null,
+        email: employeeData.email || null,
+        phone: employeeData.phone || null,
+        date_of_birth: parseDate(employeeData['date_of_birth_(yyyy-mm-dd)'], i + 1, "Date of Birth", errors),
+        gender: ["male", "female", "other"].includes(
+          employeeData.gender?.toLowerCase()
+        )
+          ? employeeData.gender
+          : null,
+        date_joined: parseDate(employeeData['date_joined_(yyyy-mm-dd)'], i + 1, "Date Joined", errors) || new Date().toISOString().split("T")[0],
+        job_title: employeeData.job_title || null,
+        job_type: ["full-time", "part-time", "contract", "internship"].includes(
+          employeeData.job_type?.toLowerCase()
+        )
+          ? employeeData.job_type
+          : null,
+        employee_status: [
+          "active",
+          "on leave",
+          "terminated",
+          "suspended",
+        ].includes(employeeData.employee_status?.toLowerCase())
+          ? employeeData.employee_status
+          : "Active",
+        employee_status_effective_date: parseDate(
+          employeeData['employee_status_effective_date_(yyyy-mm-dd)'],
+          i + 1,
+          "Employee Status Effective Date",
+          errors
+        ) || new Date().toISOString().split("T")[0],
+        id_type: ["national id", "passport"].includes(
+          employeeData.id_type?.toLowerCase()
+        )
+          ? employeeData.id_type
+          : null,
+        id_number: employeeData.id_number?.toString() || null,
+        krapin: employeeData.kra_pin ? String(employeeData.kra_pin).trim() : null,
+        shif_number: employeeData.shif_number?.toString() || null,
+        nssf_number: employeeData.nssf_number?.toString() || null,
+        citizenship: ["kenyan", "non-kenyan"].includes(
+          employeeData.citizenship?.toLowerCase()
+        )
+          ? employeeData.citizenship
+          : null,
+        has_disability: parseYesNo(employeeData.has_disability),
+        salary: parseFloat(employeeData.salary),
+        employee_type: ["primary employee", "secondary employee"].includes(
+          employeeData.employee_type?.toLowerCase()
+        )
+          ? employeeData.employee_type
+          : null,
+        pays_paye: parseNoDefaultYes(employeeData.pays_paye),
+        pays_nssf: parseNoDefaultYes(employeeData.pays_nssf),
+        pays_helb: parseYesNo(employeeData.pays_helb),
+        pays_housing_levy: parseNoDefaultYes(employeeData.pays_housing_levy),
+      };
+
+      employeesToInsert.push(record);
+    }
+
+    if (errors.length > 0) {
+      return res
+        .status(400)
+        .json({ error: "Validation failed.", details: errors });
+    }
+
+    // Insert employees
+    const { data, error } = await supabase
+      .from("employees")
+      .insert(employeesToInsert)
+      .select();
+    if (error) {
+      console.error("Bulk insert employee error:", error);
+      return res.status(500).json({ error: "Failed to import employees." });
+    }
+
+    // Add default bank details
+    const employeeBankDetails = data.map((emp) => ({
+      employee_id: emp.id,
+      payment_method: "Cash",
+    }));
+
+    const { error: bankError } = await supabase
+      .from("employee_bank_details")
+      .insert(employeeBankDetails);
+    if (bankError) {
+      console.error("Bank insert error:", bankError);
+      return res
+        .status(500)
+        .json({ error: "Employees added, but failed to insert bank details." });
+    }
+
+    res
+      .status(201)
+      .json({
+        message: `${data.length} employees imported successfully.`,
+        importedEmployees: data,
+      });
+  } catch (err) {
+    console.error("Import employees controller error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+export const generateEmployeeTemplate = async (req, res) => {
+  const { companyId } = req.params;
+  const userId = req.userId;
+
+  try {
+    // 1. Ensure the user owns the company
+    const { data: company, error: companyError } = await supabase
+      .from("companies")
+      .select("id")
+      .eq("id", companyId)
+      .eq("user_id", userId)
+      .single();
+
+    if (companyError || !company) {
+      return res
+        .status(403)
+        .json({ error: "Unauthorized to access this company." });
+    }
+
+    // 2. Fetch departments from Supabase
+    const { data: departments, error: deptError } = await supabase
+      .from("departments")
+      .select("name")
+      .eq("company_id", companyId)
+      .order("name");
+
+    if (deptError) {
+      console.error("Departments fetch error:", deptError);
+      throw new Error("Failed to fetch departments.");
+    }
+
+    // --- HEADERS ---
+    const templateHeaders = [
+      "Employee Number",
+      "First Name",
+      "Last Name",
+      "Other Names",
+      "Email",
+      "Phone",
+      "Date of Birth (YYYY-MM-DD)",
+      "Gender",
+      "Date Joined (YYYY-MM-DD)",
+      "Job Title",
+      "Job Type",
+      "Employee Status",
+      "Employee Status Effective Date (YYYY-MM-DD)",
+      "ID Type",
+      "ID Number",
+      "KRA PIN",
+      "SHIF Number",
+      "NSSF Number",
+      "Citizenship",
+      "Has Disability",
+      "Salary",
+      "Employee Type",
+      "Pays PAYE",
+      "Pays NSSF",
+      "Pays HELB",
+      "Pays Housing Levy",
+      "Department",
+    ];
+
+    // --- DROPDOWNS ---
+    const dropdownOptions = {
+      Gender: ["Male", "Female", "Other"],
+      Citizenship: ["Kenyan", "Non-Kenyan"],
+      "Job Type": ["Full-time", "Part-time", "Contract", "Internship"],
+      "Employee Type": ["Primary Employee", "Secondary Employee"],
+      "ID Type": ["National ID", "Passport"],
+      "Employee Status": ["Active", "On Leave", "Terminated", "Suspended"],
+      "Has Disability": ["Yes", "No"],
+      "Pays PAYE": ["Yes", "No"],
+      "Pays NSSF": ["Yes", "No"],
+      "Pays HELB": ["Yes", "No"],
+      "Pays Housing Levy": ["Yes", "No"],
+      Department: departments?.map((d) => d.name) || [],
+    };
+
+    // 3. Create workbook & worksheet
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Employees");
+
+    // 4. Add header row
+    const headerRow = worksheet.addRow(templateHeaders);
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFD9E1F2" },
+      };
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+
+    worksheet.columns.forEach((column, index) => {
+      const header = templateHeaders[index];
+      column.width = header.length < 15 ? 15 : header.length + 5;
+
+      if (
+        header.startsWith("Date of Birth") ||
+        header.startsWith("Date Joined") ||
+        header.startsWith("Employee Status Effective Date")
+      ) {
+        column.numFmt = "yyyy-mm-dd";
+      }
+    });
+    // 5. Add dropdowns dynamically (up to 500 rows)
+    headerRow.eachCell((cell, colNumber) => {
+      const header = cell.value;
+      if (dropdownOptions[header] && dropdownOptions[header].length > 0) {
+        worksheet.dataValidations.add(
+          `${worksheet.getColumn(colNumber).letter}2:${
+            worksheet.getColumn(colNumber).letter
+          }1000`,
+          {
+            type: "list",
+            allowBlank: true,
+            formulae: [`"${dropdownOptions[header].join(",")}"`],
+          }
+        );
+      }
+    });
+
+    // 8. Stream workbook to response
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=Employee_Import_Template.xlsx"
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error("Error generating employee template:", error);
+    res.status(500).json({ error: error.message });
+  }
 };
