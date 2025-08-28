@@ -23,7 +23,8 @@ const fetchPayrollData = async (companyId, runId) => {
                 shif_number,
                 id_number,
                 citizenship,
-                employee_type
+                employee_type,
+                has_disability
             ),
             payroll_run:payroll_run_id (
                 payroll_number
@@ -251,10 +252,9 @@ const generateKraSecB1 = (data) => {
       record.employee.citizenship.toLowerCase() !== "kenyan"
         ? "Non-Resident"
         : "Resident";
-    let employee_type =
-      record.employee.employee_type.toLowerCase() !== "primary"
-        ? "Secondary Employee"
-        : "Primary Employee";
+    let EmployeeDisabilityStatus = record.employee.has_disability
+      ? "Yes"
+      : "No";
 
     return [
       record.employee.krapin || "",
@@ -262,36 +262,26 @@ const generateKraSecB1 = (data) => {
         record.employee.other_names || ""
       } ${record.employee.last_name || ""}`.trim(),
       resident_status || "Resident",
-      employee_type || "Primary Employee",
+      record.employee.employee_type || "Primary Employee",
+      EmployeeDisabilityStatus,
+      "", // remember to fill this field with exemption certificate number if any
       formatCurrency(record.basic_salary || 0),
+      formatCurrency(getAllowanceValue("car benefit")),
+      formatCurrency(getAllowanceValue("meals benefit")),
+      formatCurrency(record.total_non_cash_benefits),
+      "Benefit not given",
       formatCurrency(getAllowanceValue("housing")),
-      formatCurrency(getAllowanceValue("transport")),
-      formatCurrency(getAllowanceValue("leave pay")),
-      formatCurrency(getAllowanceValue("overtime")),
-      formatCurrency(getAllowanceValue("director fee")),
-      "0.00",
       formatCurrency(otherAllowances),
       "", // Blank
-      formatCurrency(getAllowanceValue("car benefit")),
-      formatCurrency(record.total_non_cash_benefits),
-      "", // Blank
-      formatCurrency(getAllowanceValue("meals benefit")),
-      "Benefit not given",
-      "",
-      "",
-      "",
-      "",
-      "",
       formatCurrency(record.shif_deduction),
       formatCurrency(record.nssf_deduction),
-      "",
-      "",
+      0.00, // other pension deductions not in payroll details
+      0.00, // post retirement medical fund not in payroll details
+      0.00, // mortgage interest not in payroll details
       formatCurrency(record.housing_levy_deduction),
-      "",
-      "",
-      "",
-      "2400.00",
-      "",
+      "", // Blank
+      2400.00,
+      0, // insurance relief not in payroll details
       "",
       formatCurrency(record.paye_tax),
     ];
@@ -553,7 +543,7 @@ const generateGenericExcelReport = async (data, reportType) => {
     //console.log(data)
     headers = ["Employee No", "Full Name", "Allowance Name", "Amount"];
     worksheet.addRow(headers);
-     data.forEach((record) => {
+    data.forEach((record) => {
       const allowances = record.allowances_details || [];
       if (Array.isArray(allowances)) {
         allowances.forEach((allowance) => {
@@ -567,10 +557,10 @@ const generateGenericExcelReport = async (data, reportType) => {
       }
     });
   } else if (reportType === "Deduction Report") {
-    console.log(data)
+    console.log(data);
     headers = ["Employee No", "Full Name", "Deduction Name", "Amount"];
     worksheet.addRow(headers);
-     data.forEach((record) => {
+    data.forEach((record) => {
       const deductions = record.deductions_details || [];
       if (Array.isArray(deductions)) {
         deductions.forEach((deduction) => {
