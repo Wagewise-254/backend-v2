@@ -1,6 +1,7 @@
 // backend/routes/hrRoutes.js
 import express from 'express';
 import verifyToken from '../middleware/auth.js'
+import multer from 'multer';
 import  {
     getDepartments,
     addDepartment,
@@ -14,7 +15,8 @@ import {
     updateEmployee,
     updateEmployeeStatus,
     updateEmployeeSalary,
-    deleteEmployee
+    deleteEmployee,
+    importEmployees
 } from '../controllers/employeeController.js';
 import { 
     getKenyanBanks, 
@@ -24,6 +26,7 @@ import {
 } from '../controllers/bankController.js';
 
 const router = express.Router();
+const upload = multer();
 
 // All routes here assume a /api/company/:companyId prefix
 // And they all require authentication and company ownership check
@@ -39,6 +42,7 @@ router.get('/:companyId/employees', verifyToken, getEmployees);
 router.get('/:companyId/employees/:employeeId', verifyToken, getEmployeeById);
 router.post('/:companyId/employees', verifyToken, addEmployee);
 router.put('/:companyId/employees/:employeeId', verifyToken, updateEmployee);
+router.post('/:companyId/employees/import', verifyToken, upload.single('file'), importEmployees);
 // Specific update routes for salary and status
 router.patch('/:companyId/employees/:employeeId/status', verifyToken, updateEmployeeStatus);
 router.patch('/:companyId/employees/:employeeId/salary', verifyToken, updateEmployeeSalary);

@@ -1,5 +1,6 @@
 // backend/controllers/employeeController.js
 import supabase from "../libs/supabaseClient.js";
+import { parse} from "xlsx";
 
 // Get all employees for a specific company
 export const getEmployees = async (req, res) => {
@@ -519,4 +520,162 @@ export const deleteEmployee = async (req, res) => {
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
+};
+
+export const importEmployees = async (req, res) => {
+    const { companyId } = req.params;
+    const userId = req.userId;
+
+    if (!req.file) {
+        return res.status(400).json({ error: 'No file uploaded.' });
+    }
+
+    try {
+        // Ensure the user owns the company
+        const { data: company, error: companyError } = await supabase
+            .from("companies")
+            .select("id")
+            .eq("id", companyId)
+            .eq("user_id", userId)
+            .single();
+
+        if (companyError || !company) {
+            return res.status(403).json({ error: "Unauthorized to import employees to this company." });
+        }
+
+        // Get all departments for validation
+        const { data: departments, error: departmentsError } = await supabase
+            .from("departments")
+            .select("id, name")
+            .eq("company_id", companyId);
+
+        if (departmentsError) {
+            console.error("Fetch departments error:", departmentsError);
+            return res.status(500).json({ error: "Failed to fetch departments for validation." });
+        }
+
+        const departmentMap = departments.reduce((acc, dept) => {
+            acc[dept.name.toLowerCase()] = dept.id;
+            return acc;
+        }, {});
+
+        const workbook = parse(req.file.buffer, { type: 'buffer' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = parse(worksheet, { header: 1, raw: false }); // get data as an array of arrays
+
+        // Assuming the first row is headers, process from the second row
+        const headers = jsonData[0].map(h => h.trim());
+        const employeesToInsert = [];
+        const uniqueValues = { employee_number: new Set(), email: new Set(), id_number: new Set(), krapin: new Set() };
+        const errors = [];
+
+        for (let i = 1; i < jsonData.length; i++) {
+            const row = jsonData[i];
+            const employeeData = {};
+
+            headers.forEach((header, index) => {
+                const key = header.replace(/\s/g, '_').toLowerCase();
+                employeeData[key] = row[index];
+            });
+
+            // Basic validation and data mapping
+            if (!employeeData.employee_number || !employeeData.first_name || !employeeData.last_name || !employeeData.salary) {
+                errors.push(`Row ${i + 1}: Required fields (Employee Number, First Name, Last Name, Salary) are missing.`);
+                continue;
+            }
+
+            // Check for uniqueness
+            ['employee_number', 'email', 'id_number', 'krapin'].forEach(field => {
+                const value = employeeData[field];
+                if (value && uniqueValues[field].has(value)) {
+                    errors.push(`Row ${i + 1}: Duplicate value found for '${field}'.`);
+                } else if (value) {
+                    uniqueValues[field].add(value);
+                }
+            });
+
+            // Map department name to ID
+            const departmentName = employeeData.department?.toLowerCase();
+            const departmentId = departmentName ? departmentMap[departmentName] : null;
+
+            if (employeeData.department && !departmentId) {
+                errors.push(`Row ${i + 1}: Department '${employeeData.department}' not found.`);
+            }
+
+            // Clean up and format data for insertion
+            const employeeRecord = {
+                company_id: companyId,
+                department_id: departmentId,
+                employee_number: employeeData.employee_number.toString(),
+                first_name: employeeData.first_name,
+                last_name: employeeData.last_name,
+                other_names: employeeData.other_names || null,
+                email: employeeData.email || null,
+                phone: employeeData.phone || null,
+                date_of_birth: employeeData.date_of_birth ? new Date(employeeData.date_of_birth) : null,
+                gender: ['male', 'female', 'other'].includes(employeeData.gender?.toLowerCase()) ? employeeData.gender : null,
+                date_joined: employeeData.date_joined ? new Date(employeeData.date_joined) : new Date(),
+                job_title: employeeData.job_title || null,
+                job_type: ['full-time', 'part-time', 'contract', 'internship'].includes(employeeData.job_type?.toLowerCase()) ? employeeData.job_type : null,
+                employee_status: ['active', 'on leave', 'terminated', 'suspended'].includes(employeeData.employee_status?.toLowerCase()) ? employeeData.employee_status : 'Active',
+                employee_status_effective_date: employeeData.employee_status_effective_date ? new Date(employeeData.employee_status_effective_date) : new Date(),
+                id_type: ['national id', 'passport'].includes(employeeData.id_type?.toLowerCase()) ? employeeData.id_type : null,
+                id_number: employeeData.id_number?.toString() || null,
+                krapin: employeeData.krapin?.toString() || null,
+                shif_number: employeeData.shif_number?.toString() || null,
+                nssf_number: employeeData.nssf_number?.toString() || null,
+                citizenship: ['kenyan', 'non-kenyan'].includes(employeeData.citizenship?.toLowerCase()) ? employeeData.citizenship : null,
+                has_disability: employeeData.has_disability?.toLowerCase() === 'yes',
+                salary: parseFloat(employeeData.salary),
+                employee_type: ['primaryemployee', 'secondary employee'].includes(employeeData.employee_type?.toLowerCase()) ? employeeData.employee_type : null,
+                pays_paye: employeeData.pays_paye?.toLowerCase() === 'no' ? false : true,
+                pays_nssf: employeeData.pays_nssf?.toLowerCase() === 'no' ? false : true,
+                pays_helb: employeeData.pays_helb?.toLowerCase() === 'yes' ? true : false,
+                pays_housing_levy: employeeData.pays_housing_levy?.toLowerCase() === 'no' ? false : true,
+            };
+
+            employeesToInsert.push(employeeRecord);
+        }
+
+        if (errors.length > 0) {
+            return res.status(400).json({ error: 'Validation failed.', details: errors });
+        }
+
+        // Perform bulk insertion
+        const { data, error } = await supabase
+            .from("employees")
+            .insert(employeesToInsert)
+            .select();
+
+        if (error) {
+            console.error("Bulk insert employee error:", error);
+            if (error.code === "23505") { // Unique violation
+                return res.status(409).json({ error: "One or more employee unique details (Employee No., ID, KRA PIN, Email) already exist in the database." });
+            }
+            throw new Error("Failed to import employees.");
+        }
+
+        // Prepare bank details for insertion
+        const employeeBankDetailsToInsert = data.map(employee => ({
+            employee_id: employee.id,
+            payment_method: 'Cash',
+        }));
+
+        // Insert employee bank details
+        const { error: bankError } = await supabase
+            .from('employee_bank_details')
+            .insert(employeeBankDetailsToInsert);
+
+        if (bankError) {
+            console.error('Insert bulk bank details error:', bankError);
+            return res.status(500).json({ error: 'Failed to add employee bank details for some records.' });
+        }
+
+        res.status(201).json({ message: `${data.length} employees imported successfully.`, importedEmployees: data });
+
+    } catch (error) {
+        console.error('Import employees controller error:', error);
+        res.status(500).json({ error: error.message });
+    }
 };
