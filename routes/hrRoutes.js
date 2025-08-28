@@ -23,7 +23,9 @@ import {
     getKenyanBanks, 
     getEmployeeBankDetails, 
     updateEmployeeBankDetails, 
-    deleteEmployeeBankDetails 
+    deleteEmployeeBankDetails ,
+    generateBankDetailsTemplate,
+    importBankDetails
 } from '../controllers/bankController.js';
 
 const router = express.Router();
@@ -57,5 +59,8 @@ router.get('/:companyId/employees/:employeeId/bank-details', verifyToken, getEmp
 router.put('/:companyId/employees/:employeeId/bank-details', verifyToken, updateEmployeeBankDetails);
 router.delete('/:companyId/employees/:employeeId/bank-details', verifyToken, deleteEmployeeBankDetails);
 
+// Add the new routes for bulk bank details import
+router.get('/:companyId/employees/bank-details/template', verifyToken, generateBankDetailsTemplate); // <--- New route for template download
+router.post('/:companyId/employees/bank-details/import', verifyToken, upload.single('file'), importBankDetails); // <--- New route for file upload
 
 export default router;
