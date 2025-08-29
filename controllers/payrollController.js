@@ -180,9 +180,7 @@ export const calculatePayroll = async (req, res) => {
         .select(
           `*, allowance_types:allowance_type_id (name, is_cash, is_taxable)`
         )
-        .or(
-          `employee_id.eq.${employee.id}`
-        )
+        .or(`employee_id.eq.${employee.id}`)
         .eq("is_active", true)
         .or(
           `end_date.is.null,end_date.gte.${
@@ -240,6 +238,9 @@ export const calculatePayroll = async (req, res) => {
         .eq("company_id", companyId);
 
       if (deductionsError) throw new Error("Failed to fetch deductions.");
+      let insurancePremium = 0;
+      let insuranceRelief = 0;
+      let mortgageDeduction = 0;
 
       for (const deduction of deductions) {
         if (!deduction.deduction_types) {
@@ -255,18 +256,36 @@ export const calculatePayroll = async (req, res) => {
         } else if (deduction.calculation_type === "Percentage") {
           deductionValue = basicSalary * (parseFloat(deduction.value) / 100);
         }
-        totalCustomDeductions += deductionValue;
+        let appliedValue = deductionValue;
+        // Detect Insurance
+        if (
+          deduction.deduction_types.name.toLowerCase().includes("insurance")
+        ) {
+          insurancePremium += deductionValue;
+
+          // Calculate insurance relief (15% capped at 5,000)
+          let reliefCandidate = deductionValue * 0.15;
+          insuranceRelief += Math.min(reliefCandidate, 5000);
+        } else if (
+          deduction.deduction_types.name.toLowerCase().includes("mortgage")
+        ) {
+          // Apply mortgage cap at 30,000
+          appliedValue = Math.min(deductionValue, 30000);
+          mortgageDeduction += appliedValue;
+        }
+        totalCustomDeductions += appliedValue;
 
         deductionsDetails.push({
           name: deduction.deduction_types.name,
           value: deductionValue,
+          applied_value: appliedValue,
           is_tax_deductible: deduction.deduction_types.is_tax_deductible,
         });
       }
 
       // Calculate statutory deductions
       let grossPay = basicSalary + totalAllowances;
-      let totalGrossPay_withNonCash = grossPay + totalNonCashBenefits
+      let totalGrossPay_withNonCash = grossPay + totalNonCashBenefits;
       let nssfTiers = employee.pays_nssf
         ? calculateNSSF(grossPay)
         : { tier1: 0, tier2: 0, total: 0 };
@@ -296,6 +315,9 @@ export const calculatePayroll = async (req, res) => {
         grossPay - nssfDeduction - shifDeduction - housingLevyDeduction;
 
       let payeTax = employee.pays_paye ? calculatePAYE(taxableIncome) : 0;
+
+      // Apply insurance relief
+      payeTax = Math.max(0, payeTax - insuranceRelief);
 
       let totalStatutoryDeductionsPerEmployee =
         nssfDeduction + shifDeduction + housingLevyDeduction + payeTax;
@@ -345,6 +367,7 @@ export const calculatePayroll = async (req, res) => {
         mpesa_phone: mpesaPhone,
         allowances_details: allowancesDetails,
         deductions_details: deductionsDetails,
+        insurance_relief: insuranceRelief,
       });
 
       totalGrossPay += grossPay;
@@ -367,11 +390,9 @@ export const calculatePayroll = async (req, res) => {
       })
       .eq("id", payrollRunId);
 
-    res
-      .status(200)
-      .json({
-        message: "Payroll calculated successfully and saved as a draft.",
-      });
+    res.status(200).json({
+      message: "Payroll calculated successfully and saved as a draft.",
+    });
   } catch (error) {
     console.error("Payroll calculation error:", error);
     res.status(500).json({ error: "Failed to calculate payroll." });
@@ -508,38 +529,44 @@ export const cancelPayrollRun = async (req, res) => {
   }
 };
 
-
 export const getP9PayrollYears = async (req, res) => {
-    try {
-        const { companyId } = req.params;
+  try {
+    const { companyId } = req.params;
 
-        // Fetch all payroll runs for the company, regardless of status
-        const { data, error } = await supabase
-            .from('payroll_runs')
-            .select('payroll_year')
-            .eq('company_id', companyId);
+    // Fetch all payroll runs for the company, regardless of status
+    const { data, error } = await supabase
+      .from("payroll_runs")
+      .select("payroll_year")
+      .eq("company_id", companyId);
 
-        if (error) {
-            console.error('Error fetching P9 payroll years:', error);
-            return res.status(500).json({ success: false, message: 'Failed to fetch P9 payroll years.' });
-        }
-
-        // Check if data is null or empty
-        if (!data || data.length === 0) {
-            return res.status(200).json({ success: true, message: 'No payroll years found.', data: [] });
-        }
-
-        // Extract and return only the unique years
-        const uniqueYears = [...new Set(data.map(item => item.payroll_year))].sort();
-
-        res.status(200).json({
-            success: true,
-            message: 'P9 payroll years fetched successfully.',
-            data: uniqueYears,
-        });
-
-    } catch (err) {
-        console.error('Unexpected error in getP9PayrollYears:', err);
-        res.status(500).json({ success: false, message: 'An unexpected error occurred.' });
+    if (error) {
+      console.error("Error fetching P9 payroll years:", error);
+      return res
+        .status(500)
+        .json({ success: false, message: "Failed to fetch P9 payroll years." });
     }
+
+    // Check if data is null or empty
+    if (!data || data.length === 0) {
+      return res
+        .status(200)
+        .json({ success: true, message: "No payroll years found.", data: [] });
+    }
+
+    // Extract and return only the unique years
+    const uniqueYears = [
+      ...new Set(data.map((item) => item.payroll_year)),
+    ].sort();
+
+    res.status(200).json({
+      success: true,
+      message: "P9 payroll years fetched successfully.",
+      data: uniqueYears,
+    });
+  } catch (err) {
+    console.error("Unexpected error in getP9PayrollYears:", err);
+    res
+      .status(500)
+      .json({ success: false, message: "An unexpected error occurred." });
+  }
 };

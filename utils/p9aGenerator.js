@@ -47,7 +47,7 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
           alignment: "center",
         },
         {
-          text: `KENYA REVENUE AUTHORITY DOMESTIC TAXES DEPARTMENTTAX DEDUCTION CARD YEAR ${year}`,
+          text: `KENYA REVENUE AUTHORITY DOMESTIC TAXES DEPARTMENT TAX DEDUCTION CARD YEAR ${year}`,
           style: "header",
         },
         {
