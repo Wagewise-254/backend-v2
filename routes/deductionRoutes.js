@@ -4,16 +4,22 @@ import {
   getDeductions,
   getDeductionById,
   updateDeduction,
-  removeDeduction
+  removeDeduction,
+  generateDeductionTemplate,
+  importDeductions
 } from '../controllers/deductionController.js';
 import verifyToken from '../middleware/auth.js';
+import multer from 'multer';
 
 const router = express.Router();
+const upload = multer();
 
 router.post('/:companyId/deductions', verifyToken, assignDeduction);
 router.get('/:companyId/deductions', verifyToken, getDeductions);
+router.get('/:companyId/deductions/template', verifyToken, generateDeductionTemplate);
 router.get('/:companyId/deductions/:id', verifyToken, getDeductionById);
 router.put('/:companyId/deductions/:id', verifyToken, updateDeduction);
 router.delete('/:companyId/deductions/:id', verifyToken, removeDeduction);
+router.post('/:companyId/deductions/import', verifyToken, upload.single('file'), importDeductions); 
 
 export default router;
