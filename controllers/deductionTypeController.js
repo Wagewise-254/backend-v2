@@ -18,7 +18,7 @@ const checkCompanyOwnership = async (companyId, userId) => {
 // CREATE
 export const createDeductionType = async (req, res) => {
   const { companyId } = req.params;
-  const { name, description, is_tax_deductible = false } = req.body;
+  const { name, description, is_tax_deductible = false, has_maximum_value = false, maximum_value } = req.body;
   const userId = req.userId;
 
   try {
@@ -29,7 +29,7 @@ export const createDeductionType = async (req, res) => {
 
     const { data, error } = await supabase
       .from('deduction_types')
-      .insert([{ company_id: companyId, name, description, is_tax_deductible }])
+      .insert([{ company_id: companyId, name, description, is_tax_deductible, has_maximum_value, maximum_value }])
       .select()
       .single();
     if (error) throw error;
@@ -88,7 +88,7 @@ export const getDeductionTypeById = async (req, res) => {
 // UPDATE
 export const updateDeductionType = async (req, res) => {
   const { id, companyId } = req.params;
-  const { name, description, is_tax_deductible } = req.body;
+  const { name, description, is_tax_deductible, has_maximum_value, maximum_value } = req.body;
   const userId = req.userId;
 
   try {
@@ -99,7 +99,7 @@ export const updateDeductionType = async (req, res) => {
 
     const { data, error } = await supabase
       .from('deduction_types')
-      .update({ name, description, is_tax_deductible })
+      .update({ name, description, is_tax_deductible, has_maximum_value, maximum_value })
       .eq('id', id)
       .eq('company_id', companyId)
       .select()

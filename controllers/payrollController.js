@@ -370,8 +370,8 @@ export const calculatePayroll = async (req, res) => {
         insurance_relief: insuranceRelief,
       });
 
-      totalGrossPay += grossPay;
-      totalStatutoryDeductions += totalStatutoryDeductionsPerEmployee;
+      totalGrossPay += totalGrossPay_withNonCash;
+      totalStatutoryDeductions += totalDeductions;
       totalPaye += payeTax;
       totalNetPay += netPay;
     }
