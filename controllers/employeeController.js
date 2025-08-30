@@ -758,11 +758,20 @@ export const importEmployees = async (req, res) => {
     // Insert employees
     const { data, error } = await supabase
       .from("employees")
-      .insert(employeesToInsert)
+      .upsert(employeesToInsert, {
+        onConflict: "company_id, employee_number",
+        ignoreDuplicates: false, // Ensures all data is considered for upsert
+      })
       .select();
+
     if (error) {
-      console.error("Bulk insert employee error:", error);
-      return res.status(500).json({ error: "Failed to import employees." });
+      console.error("Bulk upsert employee error:", error);
+      // Handle unique constraint errors if they still occur from existing DB data
+      if (error.code === '23505') {
+        const uniqueKey = error.details.match(/\((.*?)\)=\(.*?\)/)[1];
+        return res.status(409).json({ error: `A record with a duplicate unique key already exists in the database: ${uniqueKey}.` });
+      }
+      return res.status(500).json({ error: "Failed to import employees.", details: error.message });
     }
 
     // Add default bank details
@@ -773,12 +782,13 @@ export const importEmployees = async (req, res) => {
 
     const { error: bankError } = await supabase
       .from("employee_bank_details")
-      .insert(employeeBankDetails);
+      .upsert(employeeBankDetails, { onConflict: "employee_id" });
+
     if (bankError) {
       console.error("Bank insert error:", bankError);
       return res
         .status(500)
-        .json({ error: "Employees added, but failed to insert bank details." });
+        .json({ error: "Employees added, but failed to insert/update bank details.", details: bankError.message });
     }
 
     res

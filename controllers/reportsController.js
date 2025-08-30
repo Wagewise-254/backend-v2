@@ -540,12 +540,12 @@ const generateGenericExcelReport = async (data, reportType) => {
 
     //3. Define headers
     headers = [
-      "EMP. NUMBER",
+      "EMP. No.",
       "NAME",
       "BASIC PAY",
       "HOUSE ALL.",
       "OVERTIME",
-      "OTHER ALLOWANCES",
+      "OTHER ALL",
       "GROSS PAY",
       "PAYE",
       "NSSF",
