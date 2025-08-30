@@ -275,12 +275,12 @@ const generateKraSecB1 = (data) => {
       "", // Blank
       formatCurrency(record.shif_deduction),
       formatCurrency(record.nssf_deduction),
-      0.00, // other pension deductions not in payroll details
-      0.00, // post retirement medical fund not in payroll details
-      0.00, // mortgage interest not in payroll details
+      0.0, // other pension deductions not in payroll details
+      0.0, // post retirement medical fund not in payroll details
+      0.0, // mortgage interest not in payroll details
       formatCurrency(record.housing_levy_deduction),
       "", // Blank
-      2400.00,
+      2400.0,
       0, // insurance relief not in payroll details
       "",
       formatCurrency(record.paye_tax),
@@ -518,26 +518,199 @@ const generateGenericExcelReport = async (data, reportType) => {
   let headers;
 
   if (reportType === "Payroll Summary") {
+    // 1. Get payroll details for the title
+    const firstRecord = data[0];
+    // Check if data is available to prevent errors on empty reports
+    if (!firstRecord || !firstRecord.payroll_run) {
+      return await workbook.xlsx.writeBuffer();
+    }
+   const payrollMonth = new Date(
+      `${firstRecord.payroll_run.payroll_number.split('-')[1].substring(4, 6)}/01/${firstRecord.payroll_run.payroll_number.split('-')[1].substring(0, 4)}`
+    ).toLocaleString('default', { month: 'long' });
+    const payrollYear = firstRecord.payroll_run.payroll_number.split('-')[1].substring(0, 4);
+
+    // 2. Add the title
+    worksheet.mergeCells("A1:M1");
+    worksheet.getCell(
+      "A1"
+    ).value = `MONTHLY PAYROLL SUMMARY: ${payrollMonth.toUpperCase()} ${payrollYear}`;
+    worksheet.getCell("A1").font = { bold: true, size: 14 };
+    worksheet.getCell("A1").alignment = { horizontal: "center" };
+    worksheet.addRow([]); // Blank row for spacing
+
+    //3. Define headers
     headers = [
-      "Employee No",
-      "Full Name",
-      "Basic Salary",
-      "Total Allowances",
-      "Total Deductions",
-      "Gross Pay",
-      "Net Pay",
+      "EMP. NUMBER",
+      "NAME",
+      "BASIC PAY",
+      "HOUSE ALL.",
+      "OVERTIME",
+      "OTHER ALLOWANCES",
+      "GROSS PAY",
+      "PAYE",
+      "NSSF",
+      "SHIF",
+      "HELB",
+      "ADVANCE",
+      "OTHER DED.",
+      "TOTAL DED.",
+      "NET PAY (KSH.)",
     ];
-    worksheet.addRow(headers);
+    worksheet.addRow(headers).eachCell((cell) => {
+      cell.font = { bold: true };
+      cell.alignment = { horizontal: "center" };
+       cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFF0F0F0' } // Light gray background
+      };
+      cell.border = {
+        top: { style: 'thin' },
+        left: { style: 'thin' },
+        bottom: { style: 'thin' },
+        right: { style: 'thin' }
+      };
+    });
+
+    let totalBasicPay = 0;
+    let totalHouseAll = 0;
+    let totalOT = 0;
+    let totalOtherAllowances = 0;
+    let totalGrossPay = 0;
+    let totalPaye = 0;
+    let totalNssf = 0;
+    let totalShif = 0;
+    let totalHelb = 0;
+    let totalAdvance = 0;
+    let totalOtherDeductions = 0;
+    let totalDeductions = 0;
+    let totalNetPay = 0;
+
+    // 4. populate data rows and calculate totals
     data.forEach((record) => {
+      let housingAllowance = 0;
+      let overtime = 0;
+      let otherAllowances = 0;
+      let advanceDeduction = 0;
+      let otherDeductions = 0;
+      let totalCustomDeductions = 0;
+      // Helper function to extract allowance value
+      const allowances = record.allowances_details || [];
+      if (Array.isArray(allowances)) {
+        allowances.forEach((allowance) => {
+          if (allowance.name?.toLowerCase().includes("housing")) {
+            housingAllowance += parseFloat(allowance.value);
+          } else if (allowance.name?.toLowerCase().includes("overtime")) {
+            overtime += parseFloat(allowance.value);
+          } else {
+            otherAllowances += parseFloat(allowance.value);
+          }
+        });
+      }
+
+      // Helper function to extract deduction value
+      const deductions = record.deductions_details || [];
+      if (Array.isArray(deductions)) {
+        deductions.forEach((deduction) => {
+          if (deduction.name?.toLowerCase().includes("advance")) {
+            advanceDeduction += parseFloat(deduction.value);
+          } else {
+            otherDeductions += parseFloat(deduction.value);
+          }
+        });
+      }
+
+      //const housingAllowance = getAllowanceValue("housing");
+      //const overtime = getAllowanceValue("overtime");
+      //const otherAllowances = parseFloat(record.total_allowances) - housingAllowance - overtime;
+      //const helbDeduction = getDeductionValue("helb");
+      //const otherDeductions = (parseFloat(record.total_deductions) - parseFloat(record.total_statutory_deductions)) - helbDeduction;
+
       worksheet.addRow([
         record.employee.employee_number,
         `${record.employee.first_name} ${record.employee.last_name}`,
         parseFloat(record.basic_salary),
-        parseFloat(record.total_allowances),
+        housingAllowance,
+        overtime,
+        otherAllowances,
+         parseFloat(record.gross_pay),
+        parseFloat(record.paye_tax),
+        parseFloat(record.nssf_deduction),
+        parseFloat(record.shif_deduction),
+        parseFloat(record.helb_deduction),
+        advanceDeduction,
+        otherDeductions,
         parseFloat(record.total_deductions),
-        parseFloat(record.gross_pay),
         parseFloat(record.net_pay),
       ]);
+
+      // Sum up totals
+      totalBasicPay += parseFloat(record.basic_salary);
+      totalHouseAll += housingAllowance;
+      totalOT += overtime;
+      totalOtherAllowances += otherAllowances;
+      totalGrossPay += parseFloat(record.gross_pay);
+      totalPaye += parseFloat(record.paye_tax);
+      totalNssf += parseFloat(record.nssf_deduction);
+      totalShif += parseFloat(record.shif_deduction);
+      totalHelb += parseFloat(record.helb_deduction);
+      totalAdvance += advanceDeduction;
+      totalOtherDeductions += otherDeductions;
+      totalDeductions += parseFloat(record.total_deductions);
+      totalNetPay += parseFloat(record.net_pay);
+    });
+
+     // 5. Add the totals row
+    worksheet.addRow([
+      "",
+      "TOTALS",
+      totalBasicPay,
+      totalHouseAll,
+      totalOT,
+      totalOtherAllowances,
+      totalGrossPay,
+      totalPaye,
+      totalNssf,
+      totalShif,
+      totalHelb,
+      totalAdvance,
+      totalOtherDeductions,
+      totalDeductions,
+      totalNetPay,
+    ]).eachCell(cell => {
+      cell.font = { bold: true };
+    });
+
+    worksheet.addRow([]); // Blank row for spacing
+    worksheet.addRow([]); // Blank row for spacing
+
+    // 6. Add payment summary section
+    const totalEmployees = data.length;
+    const totalCashPayment = data.filter(d => d.payment_method?.toLowerCase() === "cash").reduce((sum, d) => sum + parseFloat(d.net_pay), 0);
+    const totalBankPayment = data.filter(d => d.payment_method?.toLowerCase() === "bank").reduce((sum, d) => sum + parseFloat(d.net_pay), 0);
+    const totalMpesaPayment = data.filter(d => d.payment_method?.toLowerCase() === "m-pesa").reduce((sum, d) => sum + parseFloat(d.net_pay), 0);
+    const numCash = data.filter(d => d.payment_method?.toLowerCase() === "cash").length;
+    const numBank = data.filter(d => d.payment_method?.toLowerCase() === "bank").length;
+    const numMpesa = data.filter(d => d.payment_method?.toLowerCase() === "m-pesa").length;
+
+     worksheet.addRow([`TOTAL NO. OF EMPLOYEES: ${totalEmployees}`]);
+    worksheet.addRow([`TOTAL CASH PAYMENT: ${numCash} employees amounting to KSh. ${formatCurrency(totalCashPayment)}`]);
+    worksheet.addRow([`TOTAL BANK PAYMENT: ${numBank} employees amounting to KSh. ${formatCurrency(totalBankPayment)}`]);
+    worksheet.addRow([`TOTAL MPESA PAYMENT: ${numMpesa} employees amounting to KSh. ${formatCurrency(totalMpesaPayment)}`]);
+
+    // Apply currency formatting to relevant columns
+    const numberColumns = ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'];
+    numberColumns.forEach(col => {
+      worksheet.getColumn(col).numFmt = '#,##0.00';
+    });
+
+    // Set fixed widths for key columns
+    worksheet.getColumn('A').width = 12; // Emp Code
+    worksheet.getColumn('B').width = 15;
+    worksheet.columns.forEach((column) => {
+      if (column.width < 12) {
+        column.width = 12; // Minimum width for all other columns
+      }
     });
   } else if (reportType === "Allowance Report") {
     //console.log(data)
@@ -557,7 +730,7 @@ const generateGenericExcelReport = async (data, reportType) => {
       }
     });
   } else if (reportType === "Deduction Report") {
-    console.log(data);
+    //console.log(data);
     headers = ["Employee No", "Full Name", "Deduction Name", "Amount"];
     worksheet.addRow(headers);
     data.forEach((record) => {

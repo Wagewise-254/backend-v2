@@ -254,7 +254,7 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
         const k = gross - j || 0;
         const l = m.paye_tax + 2400 || 0;
         const m_p = 2400;
-        const n = 0;
+        const n = m.insurance_relief || 0;
         const o = l - m_p - n;
 
         totals.salary += salary;

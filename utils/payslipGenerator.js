@@ -76,7 +76,7 @@ export async function generatePayslipPDF(detail, formattedPayrollMonth, companyD
     const personal_relief = 2400.00;
     const gross_tax = detail.paye_tax + personal_relief || 0.00;
     const allowable_deductions = detail.total_statutory_deductions - detail.paye_tax || 0.00;
-    const total_gross_pay = detail.gross_pay + detail.total_non_cash_benefits || 0.00;
+    //const total_gross_pay = detail.gross_pay || 0.00;
 
     const margin = doc.page.margins.left;
     const contentWidth = doc.page.width - margin * 2;
@@ -156,7 +156,7 @@ const printedY = Math.max(currentY, logoHeight + doc.page.margins.top + 5);
       }
     }
 
-    currentY = drawLineItem(doc, 'GROSS PAY', formatCurrency(total_gross_pay), currentY, margin, contentWidth, true);
+    currentY = drawLineItem(doc, 'GROSS PAY', formatCurrency(detail.gross_pay), currentY, margin, contentWidth, true);
     currentY += empLineHeight * 1.2;
 
     // --- TAXATION ---
@@ -175,6 +175,9 @@ const printedY = Math.max(currentY, logoHeight + doc.page.margins.top + 5);
     }
     if (personal_relief) {
       currentY = drawLineItem(doc, 'Monthly Personal Relief', formatCurrency(personal_relief), currentY, margin, contentWidth);
+    }
+    if (detail.insurance_relief) {
+      currentY = drawLineItem(doc, 'Insurance Relief', formatCurrency(detail.insurance_relief), currentY, margin, contentWidth);
     }
     currentY += empLineHeight * 1.2;
 
