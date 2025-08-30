@@ -172,6 +172,9 @@ export const calculatePayroll = async (req, res) => {
       let totalCustomDeductions = 0;
       let allowancesDetails = [];
       let deductionsDetails = [];
+      let insurancePremium = 0;
+      let insuranceRelief = 0;
+      let mortgageDeduction = 0;
 
       // Fetch allowances for the employee or their department
       const { data: allowances, error: allowancesError } = await supabase
@@ -219,27 +222,24 @@ export const calculatePayroll = async (req, res) => {
         });
       }
 
+      const today = new Date().toISOString().split("T")[0];
+
       // Fetch custom deductions for the employee or their department
       const { data: deductions, error: deductionsError } = await supabase
         .from("deductions")
         .select(
-          `*, deduction_types:deduction_type_id (name, is_tax_deductible)`
+          `*, deduction_types:deduction_type_id (name, is_tax_deductible, has_maximum_value, maximum_value)`
         )
+        .eq("company_id", companyId)
+        .eq("is_active", true)
         .or(
           `employee_id.eq.${employee.id},department_id.eq.${employee.department_id}`
         )
-        .eq("is_active", true)
-        .or(
-          `end_date.is.null,end_date.gte.${
-            new Date().toISOString().split("T")[0]
-          }`
-        )
-        .eq("company_id", companyId);
+        .or(`end_date.is.null,end_date.gte.${today}`);
 
       if (deductionsError) throw new Error("Failed to fetch deductions.");
-      let insurancePremium = 0;
-      let insuranceRelief = 0;
-      let mortgageDeduction = 0;
+      console.log("Deductions for", employee.first_name, deductions.map(d => d.deduction_types?.name));
+
 
       for (const deduction of deductions) {
         if (!deduction.deduction_types) {
@@ -255,30 +255,34 @@ export const calculatePayroll = async (req, res) => {
         } else if (deduction.calculation_type === "Percentage") {
           deductionValue = basicSalary * (parseFloat(deduction.value) / 100);
         }
-        let appliedValue = deductionValue;
-        // Detect Insurance
-        if (
-          deduction.deduction_types.name.toLowerCase().includes("insurance")
-        ) {
-          insurancePremium += deductionValue;
 
-          // Calculate insurance relief (15% capped at 5,000)
+        // Check for maximum value constraint
+        const deductionType = deduction.deduction_types;
+        if (
+          deductionType.has_maximum_value &&
+          deductionValue > deductionType.maximum_value
+        ) {
+          deductionValue = deductionType.maximum_value;
+        }
+
+        totalCustomDeductions += deductionValue;
+        let appliedValue = deductionValue;
+
+        // Detect Insurance for relief calculation
+        // Detect Insurance for relief calculation
+        if (deductionType.name.toLowerCase().includes("insurance")) {
           let reliefCandidate = deductionValue * 0.15;
           insuranceRelief += Math.min(reliefCandidate, 5000);
-        } else if (
-          deduction.deduction_types.name.toLowerCase().includes("mortgage")
-        ) {
+        } else if (deductionType.name.toLowerCase().includes("mortgage")) {
           // Apply mortgage cap at 30,000
-          appliedValue = Math.min(deductionValue, 30000);
-          mortgageDeduction += appliedValue;
+          mortgageDeduction += Math.min(deductionValue, 30000);
         }
-        totalCustomDeductions += appliedValue;
 
+        // Push the calculated and processed deduction into the array
         deductionsDetails.push({
-          name: deduction.deduction_types.name,
+          name: deductionType.name,
           value: deductionValue,
-          applied_value: appliedValue,
-          is_tax_deductible: deduction.deduction_types.is_tax_deductible,
+          is_tax_deductible: deductionType.is_tax_deductible,
         });
       }
 
