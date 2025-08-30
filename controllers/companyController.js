@@ -1,6 +1,7 @@
 // backend/controllers/companyController.js
 import supabase from '../libs/supabaseClient.js'
 import { v4 as uuidv4 } from "uuid";
+import { sendEmail } from '../services/email.js';
 
 // Add a new company
 export const addCompany = async (req, res) => {
@@ -131,4 +132,78 @@ export const updateCompany = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
+
+export const transferCompany = async (req, res) => {
+  const  {companyId}  = req.params;
+  const { recipientEmail } = req.body;
+  const currentUserId = req.userId;
+
+  try {
+    // 1. Verify the current user owns the company
+    const { data: company, error: companyError } = await supabase
+      .from('companies')
+      .select('user_id, business_name')
+      .eq('id', companyId)
+      .single();
+
+    if (companyError || !company) {
+      return res.status(404).json({ error: 'Company not found.' });
+    }
+    if (company.user_id !== currentUserId) {
+      return res.status(403).json({ error: 'You do not have permission to transfer this company.' });
+    }
+
+    // 2. Find the recipient's user ID
+    const { data: recipientUser, error: recipientError } = await supabase.auth.admin.getUserByEmail(recipientEmail);
+
+    if (recipientError || !recipientUser) {
+      return res.status(404).json({ error: 'Recipient user not found.' });
+    }
+    if (recipientUser.user.id === currentUserId) {
+      return res.status(400).json({ error: 'Cannot transfer company to yourself.' });
+    }
+
+    const newOwnerId = recipientUser.user.id;
+
+    // 3. Update the company ownership
+    const { error: transferError } = await supabase
+      .from('companies')
+      .update({ user_id: newOwnerId })
+      .eq('id', companyId);
+
+    if (transferError) {
+      console.error("Company transfer error:", transferError);
+      return res.status(500).json({ error: "Failed to transfer company ownership." });
+    }
+
+    // 4. Send email notifications
+    //const currentOwnerEmail = recipientUser.user.email; // We get this from the user's session in a real app
+
+    // This is a placeholder, you will need to find a way to get the current user's email
+    // For simplicity, we assume we have it.
+    const currentOwner = await supabase.auth.admin.getUserById(currentUserId);
+    const currentOwnerEmailAddress = currentOwner.user.email;
+
+    // Email to the new owner
+    await sendEmail(
+      recipientEmail,
+      'Company Transfer Complete',
+      `You have been made the new owner of the company "${company.business_name}".`
+    );
+
+    // Email to the previous owner
+    await sendEmail(
+      currentOwnerEmailAddress,
+      'Company Transfer Complete',
+      `You have successfully transferred ownership of "${company.business_name}" to ${recipientEmail}.`
+    );
+
+    res.status(200).json({ message: 'Company ownership transferred successfully.' });
+
+  } catch (err) {
+    console.error("Transfer company controller error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 

@@ -32,7 +32,6 @@ app.get('/', (req, res) => {
 // Endpoint to send the welcome email
 app.post('/api/welcome-email', async (req, res) => {
     const { email, userName } = req.body;
-
     if (!email || !userName) {
         return res.status(400).json({ error: 'Email and userName are required.' });
     }
@@ -59,37 +58,22 @@ app.post('/api/welcome-email', async (req, res) => {
 
 // New endpoint to send payslip email with attachment
 // Use the new company routes
+// This line handles all the routes defined in companyRoutes.js
 app.use('/api/companies', companyRoutes);
 
-// Use HR-related routes (e.g., /api/company/:companyId/employees, /api/company/:companyId/departments)
-app.use('/api/company', hrRoutes);
-
-// Use Payroll-related routes (e.g., /api/company/:companyId/payroll/runs)
-//app.use('/api/company', payrollRoutes);
-
-// Use Allowance routes
-app.use('/api/company', allowanceRoutes);
-app.use('/api/company', allowanceTypeRoutes);
-
-// Use Deduction routes
-app.use('/api/company', deductionRoutes);
-app.use('/api/company', deductionTypeRoutes);
-
-// Mount under company & employee context
+// Correctly mount other routes
 app.use('/api/companies/:companyId/', helbRoutes);
-
-// Mount statutory routes
 app.use('/api/companies/:companyId', statutoryRoutes);
-
-// Use Payroll-related routes (e.g., /api/company/:companyId/payroll/runs)
-app.use('/api/company/:companyId', payrollRoutes); // Use the new routes
-
-// Mount the new dashboard routes
+app.use('/api/company/:companyId', payrollRoutes);
 app.use('/api/company/:companyId', dashboardRoutes);
 app.use('/api/company/:companyId/payroll/payslip', payslipRoutes);
 app.use('/api/company/:companyId/payroll/runs', reportsRoutes);
-// Mount the new P9A route under the company and employee context
 app.use('/api/companies/:companyId/employees', p9aRoutes);
+app.use('/api/company', hrRoutes);
+app.use('/api/company', allowanceRoutes);
+app.use('/api/company', allowanceTypeRoutes);
+app.use('/api/company', deductionRoutes);
+app.use('/api/company', deductionTypeRoutes);
 
 
 

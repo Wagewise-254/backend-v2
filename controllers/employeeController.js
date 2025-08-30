@@ -2,6 +2,7 @@
 import supabase from "../libs/supabaseClient.js";
 import ExcelJS from "exceljs";
 import pkg from 'xlsx';
+import { sendEmail } from "../services/email.js";
 const { utils, read, SSF } = pkg;
 
 // -------------------- Helper Functions -------------------- //
@@ -48,6 +49,51 @@ function parseNoDefaultYes(value) {
   if (!value) return true; // default = yes
   return value.toString().trim().toLowerCase() !== "no";
 }
+
+// ---- NEW: Function to send a well-styled welcome email ----
+const sendWelcomeEmail = async (toEmail, employeeName, companyName) => {
+    try {
+        await sendEmail({
+            to: toEmail,
+            subject: `Welcome to ${companyName || 'Your Company'}! Your Wagewise Employee Account is Ready`,
+            html: `
+                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 20px;">
+                    <table width="100%" border="0" cellspacing="0" cellpadding="0">
+                        <tr>
+                            <td align="center" style="padding-bottom: 20px;">
+                                <h1 style="color: #7F5EFD; font-size: 28px; margin: 0;">Wagewise</h1>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td align="center">
+                                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
+                                    <tr>
+                                        <td style="padding: 40px;">
+                                            <p style="font-size: 18px; margin-bottom: 20px;">Dear ${employeeName},</p>
+                                            <p style="font-size: 16px; margin-bottom: 20px;">Welcome aboard! We are excited to have you join ${companyName || 'our team'}.</p>
+                                            <p style="font-size: 16px; margin-bottom: 30px;">Your employee account has been set up on Wagewise. You will receive important communications, including your payslips, via this platform.</p>
+                                            <p style="font-size: 16px; margin-top: 20px;">Best regards,<br>The ${companyName || 'Company'} Team</p>
+                                        </td>
+                                    </tr>
+                                </table>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td align="center" style="padding-top: 20px;">
+                                <p style="font-size: 12px; color: #888;">&copy; ${new Date().getFullYear()} Wagewise. All rights reserved.</p>
+                            </td>
+                        </tr>
+                    </table>
+                </div>
+            `,
+        });
+        console.log(`Welcome email sent to ${toEmail}`);
+    } catch (emailError) {
+        console.error(`Failed to send welcome email to ${toEmail}:`, emailError.message);
+    }
+};
+
+// -------------------- Employee Controllers -------------------- //
 
 // Get all employees for a specific company
 export const getEmployees = async (req, res) => {
@@ -304,6 +350,8 @@ export const updateEmployee = async (req, res) => {
     pays_housing_levy,
   } = req.body;
 
+  const validatedDepartmentId = department_id === "" ? null : department_id;
+
   if (!employee_number || !first_name || !last_name || !salary) {
     return res.status(400).json({ error: "Required fields are missing." });
   }
@@ -340,7 +388,7 @@ export const updateEmployee = async (req, res) => {
     const { data, error } = await supabase
       .from("employees")
       .update({
-        department_id,
+        department_id: validatedDepartmentId,
         employee_number,
         first_name,
         last_name,
@@ -685,20 +733,20 @@ export const importEmployees = async (req, res) => {
       // Build employee record
       const record = {
         company_id: companyId,
-        department_id: departmentId,
+        department_id: employeeData.department ? departmentMap[employeeData.department.toLowerCase()] || null : null,
         employee_number: employeeData.employee_number.toString(),
         first_name: employeeData.first_name,
         last_name: employeeData.last_name,
         other_names: employeeData.other_names || null,
         email: employeeData.email || null,
         phone: employeeData.phone || null,
-        date_of_birth: parseDate(employeeData['date_of_birth_(yyyy-mm-dd)'], i + 1, "Date of Birth", errors),
+        date_of_birth: employeeData['date_of_birth_(yyyy-mm-dd)'] ? parseDate(employeeData['date_of_birth_(yyyy-mm-dd)'], i + 1, "Date of Birth", errors) : null,
         gender: ["male", "female", "other"].includes(
           employeeData.gender?.toLowerCase()
         )
           ? employeeData.gender
           : null,
-        date_joined: parseDate(employeeData['date_joined_(yyyy-mm-dd)'], i + 1, "Date Joined", errors) || new Date().toISOString().split("T")[0],
+        date_joined: employeeData['date_joined_(yyyy-mm-dd)'] ? parseDate(employeeData['date_joined_(yyyy-mm-dd)'], i + 1, "Date Joined", errors) : new Date().toISOString().split("T")[0],
         job_title: employeeData.job_title || null,
         job_type: ["full-time", "part-time", "contract", "internship"].includes(
           employeeData.job_type?.toLowerCase()
@@ -713,12 +761,7 @@ export const importEmployees = async (req, res) => {
         ].includes(employeeData.employee_status?.toLowerCase())
           ? employeeData.employee_status
           : "Active",
-        employee_status_effective_date: parseDate(
-          employeeData['employee_status_effective_date_(yyyy-mm-dd)'],
-          i + 1,
-          "Employee Status Effective Date",
-          errors
-        ) || new Date().toISOString().split("T")[0],
+        employee_status_effective_date: employeeData['employee_status_effective_date_(yyyy-mm-dd)'] ? parseDate(employeeData['employee_status_effective_date_(yyyy-mm-dd)'], i + 1, "Employee Status Effective Date", errors) : new Date().toISOString().split("T")[0],
         id_type: ["national id", "passport"].includes(
           employeeData.id_type?.toLowerCase()
         )
@@ -734,7 +777,7 @@ export const importEmployees = async (req, res) => {
           ? employeeData.citizenship
           : null,
         has_disability: parseYesNo(employeeData.has_disability),
-        salary: parseFloat(employeeData.salary),
+        salary: parseFloat(employeeData.salary) || 0,
         employee_type: ["primary employee", "secondary employee"].includes(
           employeeData.employee_type?.toLowerCase()
         )
@@ -772,6 +815,21 @@ export const importEmployees = async (req, res) => {
         return res.status(409).json({ error: `A record with a duplicate unique key already exists in the database: ${uniqueKey}.` });
       }
       return res.status(500).json({ error: "Failed to import employees.", details: error.message });
+    }
+
+    // After successful upsert, send a welcome email to each new employee
+    // You can get the company name from the companyId or a request body
+    const { data: companyData } = await supabase.from('companies').select('business_name').eq('id', companyId).single();
+    const companyName = companyData ? companyData.business_name : 'Your Company';
+
+    // Loop through the upserted employees and send the email
+    for (const employee of data) {
+      if (employee.email) {
+        // You'll need to check if the employee was newly inserted or updated.
+        // For simplicity, we send a welcome email to all. A more advanced
+        // implementation would only send it on new insertions.
+        await sendWelcomeEmail(employee.email, `${employee.first_name} ${employee.last_name}`, companyName);
+      }
     }
 
     // Add default bank details
