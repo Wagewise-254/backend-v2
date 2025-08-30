@@ -114,10 +114,9 @@ export const calculatePayroll = async (req, res) => {
     if (countError) throw new Error("Failed to count previous payroll runs.");
 
     const payrollCount = count || 0;
-    const payrollNumber = `PR-${year}-${String(month).padStart(
-      2,
-      "0"
-    )}-${String(payrollCount + 1).padStart(3, "0")}`;
+    const payrollNumber = `PR-${year}${String(
+      new Date(`${month} 1, ${year}`).getMonth() + 1
+    ).padStart(2, "0")}-${Date.now().toString().slice(-6)}`;
 
     // 3. Fetch all active employees for the company
     const { data: employees, error: employeesError } = await supabase
