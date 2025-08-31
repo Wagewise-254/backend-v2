@@ -29,12 +29,37 @@ const calculatePAYE = (taxableIncome) => {
 };
 
 // NSSF Tiered Contribution (New rates)
-const calculateNSSF = (basicSalary) => {
-  let tier1_cap = 8000;
-  let tier2_cap = 72000;
+const calculateNSSF = (basicSalary, payrollMonth, payrollYear) => {
+  let tier1_cap;
+  let tier2_cap;
   const nssf_rate = 0.06;
   let tier1_deduction = 0;
   let tier2_deduction = 0;
+
+  const monthNames = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+  const payrollMonthIndex = monthNames.indexOf(payrollMonth);
+  if (payrollYear > 2025 || (payrollYear === 2025 && payrollMonthIndex >= 1)) {
+    // February 2025 onwards
+    tier1_cap = 8000;
+    tier2_cap = 72000;
+  } else {
+    // Up to January 2025
+    tier1_cap = 7000;
+    tier2_cap = 36000;
+  }
 
   tier1_deduction = Math.min(basicSalary, tier1_cap) * nssf_rate;
 
@@ -238,8 +263,11 @@ export const calculatePayroll = async (req, res) => {
         .or(`end_date.is.null,end_date.gte.${today}`);
 
       if (deductionsError) throw new Error("Failed to fetch deductions.");
-      console.log("Deductions for", employee.first_name, deductions.map(d => d.deduction_types?.name));
-
+      console.log(
+        "Deductions for",
+        employee.first_name,
+        deductions.map((d) => d.deduction_types?.name)
+      );
 
       for (const deduction of deductions) {
         if (!deduction.deduction_types) {
@@ -290,7 +318,7 @@ export const calculatePayroll = async (req, res) => {
       let grossPay = basicSalary + totalAllowances;
       let totalGrossPay_withNonCash = grossPay + totalNonCashBenefits;
       let nssfTiers = employee.pays_nssf
-        ? calculateNSSF(grossPay)
+        ? calculateNSSF(grossPay, month, year)
         : { tier1: 0, tier2: 0, total: 0 };
       let nssfDeduction = nssfTiers.total;
       let shifDeduction = employee.shif_number ? calculateSHIF(grossPay) : 0;
@@ -315,7 +343,21 @@ export const calculatePayroll = async (req, res) => {
       }
 
       let taxableIncome =
-        grossPay - nssfDeduction - shifDeduction - housingLevyDeduction;
+        grossPay - nssfDeduction;
+
+      // Conditionally deduct SHIF and Housing Levy based on the payroll date
+      const payrollDate = new Date(`${month} 1, ${year}`);
+      const deductionStartDate = new Date("December 27, 2024");
+
+      // SHIF is tax-deductible from Dec 27, 2024 onwards
+      if (payrollDate >= deductionStartDate) {
+        taxableIncome -= shifDeduction;
+      }
+
+      // Housing Levy is tax-deductible from Dec 27, 2024 onwards
+      if (payrollDate >= deductionStartDate) {
+        taxableIncome -= housingLevyDeduction;
+      }
 
       let payeTax = employee.pays_paye ? calculatePAYE(taxableIncome) : 0;
 
