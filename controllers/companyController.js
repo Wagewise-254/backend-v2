@@ -277,7 +277,7 @@ export const transferCompany = async (req, res) => {
                                               currentOwner.user_metadata
                                                 .user_name || "User"
                                             },</p>
-                                            <p style="font-size: 16px; margin-bottom: 20px;">You successfully transferred ownership of <b>${
+                                            <p style="font-size: 16px; margin-bottom: 20px;">You have successfully transferred ownership of <b>${
                                               company.business_name
                                             }</b> to ${recipientEmail}.</p>
                                             <p style="font-size: 16px; margin-top: 20px;">Best regards,<br>The Team</p>
