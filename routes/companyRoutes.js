@@ -10,7 +10,7 @@ const upload = multer({ storage: multer.memoryStorage() });
 const router = express.Router();
 
 // All company routes will be protected by the verifyToken middleware
-router.put('/:id/transfer', verifyToken, transferCompany);
+router.put("/:companyId/transfer", verifyToken, transferCompany);
 router.put('/:id', verifyToken, upload.single('logo'), updateCompany);
 router.get('/', verifyToken, getCompanies);
 router.post('/', verifyToken, upload.single('logo'), addCompany);
