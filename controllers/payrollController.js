@@ -189,6 +189,32 @@ export const calculatePayroll = async (req, res) => {
     let totalPaye = 0;
     let totalNetPay = 0;
 
+    const today = new Date().toISOString().split("T")[0];
+
+    // Fetch all active allowances for the company
+    const { data: allAllowances, error: allAllowancesError } = await supabase
+      .from("allowances")
+      .select(
+        `*, allowance_types:allowance_type_id (name, is_cash, is_taxable)`
+      )
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .or(`end_date.is.null,end_date.gte.${today}`);
+
+    if (allAllowancesError) throw new Error("Failed to fetch allowances.");
+
+    // Fetch all active deductions for the company
+    const { data: allDeductions, error: allDeductionsError } = await supabase
+      .from("deductions")
+      .select(
+        `*, deduction_types:deduction_type_id (name, is_tax_deductible, has_maximum_value, maximum_value)`
+      )
+      .eq("company_id", companyId)
+      .eq("is_active", true)
+      .or(`end_date.is.null,end_date.gte.${today}`);
+
+    if (allDeductionsError) throw new Error("Failed to fetch deductions.");
+
     // 6. Loop through each employee and calculate payroll
     for (const employee of employees) {
       let basicSalary = parseFloat(employee.salary);
@@ -201,22 +227,12 @@ export const calculatePayroll = async (req, res) => {
       let insuranceRelief = 0;
       let mortgageDeduction = 0;
 
-      // Fetch allowances for the employee or their department
-      const { data: allowances, error: allowancesError } = await supabase
-        .from("allowances")
-        .select(
-          `*, allowance_types:allowance_type_id (name, is_cash, is_taxable)`
-        )
-        .or(`employee_id.eq.${employee.id}`)
-        .eq("is_active", true)
-        .or(
-          `end_date.is.null,end_date.gte.${
-            new Date().toISOString().split("T")[0]
-          }`
-        )
-        .eq("company_id", companyId);
-
-      if (allowancesError) throw new Error("Failed to fetch allowances.");
+      // Get only this employee’s or department’s allowances
+      const allowances = allAllowances.filter(
+        (a) =>
+          a.employee_id === employee.id ||
+          a.department_id === employee.department_id
+      );
 
       for (const allowance of allowances) {
         if (!allowance.allowance_types) {
@@ -247,22 +263,13 @@ export const calculatePayroll = async (req, res) => {
         });
       }
 
-      const today = new Date().toISOString().split("T")[0];
+      // Get only this employee’s or department’s deductions
+      const deductions = allDeductions.filter(
+        (d) =>
+          d.employee_id === employee.id ||
+          d.department_id === employee.department_id
+      );
 
-      // Fetch custom deductions for the employee or their department
-      const { data: deductions, error: deductionsError } = await supabase
-        .from("deductions")
-        .select(
-          `*, deduction_types:deduction_type_id (name, is_tax_deductible, has_maximum_value, maximum_value)`
-        )
-        .eq("company_id", companyId)
-        .eq("is_active", true)
-        .or(
-          `employee_id.eq.${employee.id},department_id.eq.${employee.department_id}`
-        )
-        .or(`end_date.is.null,end_date.gte.${today}`);
-
-      if (deductionsError) throw new Error("Failed to fetch deductions.");
       console.log(
         "Deductions for",
         employee.first_name,
@@ -342,8 +349,7 @@ export const calculatePayroll = async (req, res) => {
         helbDeduction = helbData ? parseFloat(helbData.monthly_deduction) : 0;
       }
 
-      let taxableIncome =
-        grossPay - nssfDeduction;
+      let taxableIncome = grossPay - nssfDeduction;
 
       // Conditionally deduct SHIF and Housing Levy based on the payroll date
       const payrollDate = new Date(`${month} 1, ${year}`);
