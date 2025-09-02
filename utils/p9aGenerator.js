@@ -9,7 +9,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // Always resolve relative to project root (backend/)
-const projectRoot = path.resolve(__dirname, "..");
+const projectRoot = path.resolve(__dirname, "..", "..");
 
 function formatCurrency(amount) {
   const num = parseFloat(amount);
@@ -31,6 +31,9 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
           bolditalics: path.join(projectRoot, "fonts", "Georgia-BoldItalic.ttf"),
         },
       };
+
+      console.log("Looking for fonts in:", path.join(projectRoot, "fonts"));
+
 
       const printer = new PdfPrinter(fonts);
 
