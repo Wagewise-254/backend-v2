@@ -34,10 +34,10 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
     try {
       const fonts = {
         Georgia: {
-          normal: path.join(fontsDir, "Georgia.ttf"),
-          bold: path.join(fontsDir, "Georgia-Bold.ttf"),
-          italics: path.join(fontsDir, "Georgia-Italic.ttf"),
-          bolditalics: path.join(fontsDir, "Georgia-BoldItalic.ttf"),
+          normal: path.join(fontsDir, "Georgia.TTF"),
+          bold: path.join(fontsDir, "Georgia-Bold.TTF"),
+          italics: path.join(fontsDir, "Georgia-Italic.TTF"),
+          bolditalics: path.join(fontsDir, "Georgia-BoldItalic.TTF"),
         },
       };
 
