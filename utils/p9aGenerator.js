@@ -2,6 +2,11 @@
 import PdfPrinter from "pdfmake";
 import fs from "fs";
 import path from "path";
+import { fileURLToPath } from 'url';
+
+// Helper to get the directory name in ES Modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 function formatCurrency(amount) {
   const num = parseFloat(amount);
@@ -17,17 +22,18 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
     try {
       const fonts = {
         Georgia: {
-          normal: path.join(process.cwd(), "fonts/Georgia.ttf"),
-          bold: path.join(process.cwd(), "fonts/Georgia-Bold.ttf"),
-          italics: path.join(process.cwd(), "fonts/Georgia-Italic.ttf"),
-          bolditalics: path.join(process.cwd(), "fonts/Georgia-BoldItalic.ttf"),
+          // Use __dirname to create a path relative to the current file's directory
+          normal: path.join(__dirname, "../fonts/Georgia.ttf"),
+          bold: path.join(__dirname, "../fonts/Georgia-Bold.ttf"),
+          italics: path.join(__dirname, "../fonts/Georgia-Italic.ttf"),
+          bolditalics: path.join(__dirname, "../fonts/Georgia-BoldItalic.ttf"),
         },
       };
 
       const printer = new PdfPrinter(fonts);
 
       // Ensure logo exists
-      const logoPath = path.join(process.cwd(), "assets/images/kra_logo.png");
+      const logoPath = path.join(__dirname, "../assets/images/kra_logo.png");
       let logo = null;
       if (fs.existsSync(logoPath)) {
         logo = logoPath;
@@ -44,10 +50,12 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
         {
           text: "ISO 9001:2015 CERTIFIED",
           style: "header",
+          fontSize: 8,
           alignment: "center",
         },
         {
           text: `KENYA REVENUE AUTHORITY DOMESTIC TAXES DEPARTMENT TAX DEDUCTION CARD YEAR ${year}`,
+          fontSize: 9,
           style: "header",
         },
         {

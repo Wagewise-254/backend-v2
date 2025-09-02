@@ -552,6 +552,38 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
 
     //  --------- Header Section (Row 1-5) ------------
 
+    // 1. Merge cells for the header section
+    worksheet.mergeCells("A1:K5");
+
+    // 2. Combine all header text into a single value for the merged cell A1
+    const mainTitle = `MONTHLY PAYROLL SUMMARY: ${payrollMonth.toUpperCase()} ${payrollYear}`;
+    const departmentInfo = "DEPARTMENT: ALL";
+
+    // Set the value of the merged cell. Use newlines for formatting.
+    const mergedCell = worksheet.getCell('A1');
+    mergedCell.value = `${companyDetails?.business_name?.toUpperCase() || 'YOUR COMPANY'}\n${mainTitle}\n${departmentInfo}`;
+
+    // Apply styles to the merged cell
+    mergedCell.font = {
+      bold: true,
+      size: 14
+    };
+    mergedCell.alignment = {
+      horizontal: 'center',
+      vertical: 'middle',
+      wrapText: true
+    };
+    mergedCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFFFFF' }, // White background
+    };
+    mergedCell.border = {
+      top: { style: 'none' },
+      left: { style: 'none' },
+      bottom: { style: 'none' },
+      right: { style: 'none' },
+    };
     // 1. Company Logo
     const logoUrl = companyDetails?.logo_url;
     if (logoUrl) {
@@ -571,26 +603,6 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
       }
     }
 
-        // 2. Main Title and Department (Center)
-    // Merge cells for the title and department info to center it
-    worksheet.mergeCells('B2:J2');
-    worksheet.getCell('B2').value = `MONTHLY PAYROLL SUMMARY: ${payrollMonth.toUpperCase()} ${payrollYear}`;
-    worksheet.getCell('B2').font = { bold: true, size: 14 };
-    worksheet.getCell('B2').alignment = { horizontal: 'center' };
-
-    worksheet.mergeCells('B3:J3');
-    worksheet.getCell("B3").value = "DEPARTMENT: ALL";
-    worksheet.getCell("B3").font = { bold: true };
-    worksheet.getCell('B3').alignment = { horizontal: 'center' };
-
-    // 3. Company Name and Details (Right side)
-    const companyInfoCol = 11; // Column L
-    worksheet.getCell(1, companyInfoCol).value = companyDetails?.business_name?.toUpperCase() || 'YOUR COMPANY';
-    worksheet.getCell(1, companyInfoCol).font = { bold: true };
-    worksheet.getCell(2, companyInfoCol).value = `P.O. BOX ${companyDetails?.address?.split(',')[0]?.replace('P.O. Box ', '') || 'N/A'}`;
-    worksheet.getCell(3, companyInfoCol).value = `Tel: ${companyDetails?.company_phone || 'N/A'}`;
-    worksheet.getCell(4, companyInfoCol).value = `Email: ${companyDetails?.company_email || 'N/A'}`;
-    
     // Space after header
     const dataStartRow = 6;
 
