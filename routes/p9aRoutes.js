@@ -1,6 +1,6 @@
 // backend/routes/p9aRoutes.js
 import express from 'express';
-import { generateP9APdf } from '../controllers/p9aController.js';
+import { generateP9APdf, emailP9A } from '../controllers/p9aController.js';
 import verifyToken from '../middleware/auth.js';
 
 const router = express.Router({ mergeParams: true });
@@ -48,5 +48,8 @@ const router = express.Router({ mergeParams: true });
  * description: Server error.
  */
 router.get('/:employeeId/p9a/:year', verifyToken, generateP9APdf);
+
+// Define the new route to email the P9A
+router.post('/:employeeId/p9a/:year/email', verifyToken, emailP9A);
 
 export default router;

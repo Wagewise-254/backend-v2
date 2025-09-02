@@ -109,6 +109,19 @@ export const getPayslipEmailTemplate = (employeeName, companyName, payrollPeriod
   `;
 };
 
+export const getP9AEmailTemplate = (employeeName, companyName, year) => {
+    return `
+    <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+        <p>Hello ${employeeName},</p>
+        <p>Attached is your P9A tax deduction card for the year ${year} from ${companyName}.</p>
+        <p>This document summarizes your annual earnings and tax deductions as required by the Kenya Revenue Authority (KRA).</p>
+        <p>If you have any questions, please contact your payroll administrator.</p>
+        <p>Best regards,<br/>The ${companyName} Payroll Team</p>
+    </div>
+    `;
+};
+
+
 
 /**
  * Generates a modern HTML email template for the password recovery code.
