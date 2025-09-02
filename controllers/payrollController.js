@@ -25,7 +25,7 @@ const calculatePAYE = (taxableIncome) => {
 
   // Apply personal relief
   let finalPaye = paye - personalRelief;
-  return Math.max(0, finalPaye); // PAYE cannot be negative
+  return Math.round(Math.max(0, finalPaye)); // PAYE cannot be negative
 };
 
 // NSSF Tiered Contribution (New rates)

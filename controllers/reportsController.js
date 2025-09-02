@@ -4,6 +4,7 @@ import { Parser } from "json2csv";
 import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { stringify } from "csv-stringify";
+import fetch from "node-fetch";
 
 // Helper function to fetch payroll details for a given run
 const fetchPayrollData = async (companyId, runId) => {
@@ -50,8 +51,20 @@ const fetchPayrollData = async (companyId, runId) => {
   return data;
 };
 
-// ... (Add all the helper functions for each file type here)
+// Helper function to fetch company details
+const fetchCompanyDetails = async (companyId) => {
+  const { data, error } = await supabase
+    .from("companies")
+    .select("*")
+    .eq("id", companyId)
+    .single();
+  if (error) {
+    throw new Error("Failed to fetch company details.");
+  }
+  return data;
+};
 
+// Helper functions for each file type here
 export const generateReport = async (req, res) => {
   const { companyId, runId, reportType } = req.params;
 
@@ -61,6 +74,10 @@ export const generateReport = async (req, res) => {
 
   try {
     const payrollData = await fetchPayrollData(companyId, runId);
+    let companyDetails;
+    if (reportType === "payroll-summary") {
+      companyDetails = await fetchCompanyDetails(companyId);
+    }
 
     switch (reportType) {
       case "kra-sec-b1":
@@ -149,7 +166,8 @@ export const generateReport = async (req, res) => {
       case "payroll-summary":
         const summaryExcelBuffer = await generateGenericExcelReport(
           payrollData,
-          "Payroll Summary"
+          "Payroll Summary",
+          companyDetails
         );
         res.setHeader(
           "Content-Type",
@@ -281,7 +299,7 @@ const generateKraSecB1 = (data) => {
       formatCurrency(record.housing_levy_deduction),
       "", // Blank
       2400.0,
-      0, // insurance relief not in payroll details
+      record.insurance_relief || 0.0, // insurance relief not in payroll details
       "",
       formatCurrency(record.paye_tax),
     ];
@@ -300,7 +318,7 @@ const generateNssfReturn = async (data) => {
   const worksheet = workbook.addWorksheet("NSSF Return");
 
   const headers = [
-    "Payroll number",
+    "Employee No.",
     "Surname",
     "Other names",
     "ID number",
@@ -313,7 +331,7 @@ const generateNssfReturn = async (data) => {
 
   data.forEach((record) => {
     worksheet.addRow([
-      record.payroll_run.payroll_number,
+      record.employee.employee_number,
       record.employee.last_name,
       `${record.employee.first_name} ${
         record.employee.other_names || ""
@@ -512,206 +530,244 @@ const generateCashPaymentSheet = async (data) => {
 };
 
 // Generic report generation (Payroll Summary, Allowance, Deduction)
-const generateGenericExcelReport = async (data, reportType) => {
+const generateGenericExcelReport = async (data, reportType, companyDetails) => {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet(reportType);
   let headers;
 
   if (reportType === "Payroll Summary") {
-    // 1. Get payroll details for the title
-    const firstRecord = data[0];
     // Check if data is available to prevent errors on empty reports
-    if (!firstRecord || !firstRecord.payroll_run) {
+    if (!data || data.length === 0) {
       return await workbook.xlsx.writeBuffer();
     }
-   const payrollMonth = new Date(
-      `${firstRecord.payroll_run.payroll_number.split('-')[1].substring(4, 6)}/01/${firstRecord.payroll_run.payroll_number.split('-')[1].substring(0, 4)}`
-    ).toLocaleString('default', { month: 'long' });
-    const payrollYear = firstRecord.payroll_run.payroll_number.split('-')[1].substring(0, 4);
+    //  Get payroll details for the title
+    const firstRecord = data[0];
+    const payrollNumber = firstRecord.payroll_run?.payroll_number || "N/A";
+    const payrollMonth = new Date(
+      `${payrollNumber.split("-")[1].substring(4, 6)}/01/${payrollNumber
+        .split("-")[1]
+        .substring(0, 4)}`
+    ).toLocaleString("default", { month: "long" });
+    const payrollYear = payrollNumber.split("-")[1].substring(0, 4);
 
-    // 2. Add the title
-    worksheet.mergeCells("A1:M1");
-    worksheet.getCell(
-      "A1"
-    ).value = `MONTHLY PAYROLL SUMMARY: ${payrollMonth.toUpperCase()} ${payrollYear}`;
-    worksheet.getCell("A1").font = { bold: true, size: 14 };
-    worksheet.getCell("A1").alignment = { horizontal: "center" };
-    worksheet.addRow([]); // Blank row for spacing
+    //  --------- Header Section (Row 1-5) ------------
 
-    //3. Define headers
-    headers = [
-      "EMP. No.",
-      "NAME",
-      "BASIC PAY",
-      "HOUSE ALL.",
-      "OVERTIME",
-      "OTHER ALL",
+    // 1. Company Logo
+    const logoUrl = companyDetails?.logo_url;
+    if (logoUrl) {
+      try {
+        const logoResponse = await fetch(logoUrl);
+        const logoBuffer = await logoResponse.buffer();
+        const logoImage = workbook.addImage({
+          buffer: logoBuffer,
+          extension: "jpeg",
+        });
+        worksheet.addImage(logoImage, {
+          tl: { col: 1, row: 1 },
+          ext: { width: 60, height: 60 },
+        });
+      } catch (e) {
+        console.error("Failed to add logo:", e);
+      }
+    }
+
+        // 2. Main Title and Department (Center)
+    // Merge cells for the title and department info to center it
+    worksheet.mergeCells('B2:J2');
+    worksheet.getCell('B2').value = `MONTHLY PAYROLL SUMMARY: ${payrollMonth.toUpperCase()} ${payrollYear}`;
+    worksheet.getCell('B2').font = { bold: true, size: 14 };
+    worksheet.getCell('B2').alignment = { horizontal: 'center' };
+
+    worksheet.mergeCells('B3:J3');
+    worksheet.getCell("B3").value = "DEPARTMENT: ALL";
+    worksheet.getCell("B3").font = { bold: true };
+    worksheet.getCell('B3').alignment = { horizontal: 'center' };
+
+    // 3. Company Name and Details (Right side)
+    const companyInfoCol = 11; // Column L
+    worksheet.getCell(1, companyInfoCol).value = companyDetails?.business_name?.toUpperCase() || 'YOUR COMPANY';
+    worksheet.getCell(1, companyInfoCol).font = { bold: true };
+    worksheet.getCell(2, companyInfoCol).value = `P.O. BOX ${companyDetails?.address?.split(',')[0]?.replace('P.O. Box ', '') || 'N/A'}`;
+    worksheet.getCell(3, companyInfoCol).value = `Tel: ${companyDetails?.company_phone || 'N/A'}`;
+    worksheet.getCell(4, companyInfoCol).value = `Email: ${companyDetails?.company_email || 'N/A'}`;
+    
+    // Space after header
+    const dataStartRow = 6;
+
+    //detemine unique allowance and deduction types
+    // Determine unique allowance and deduction types
+    const uniqueAllowances = new Set();
+    const uniqueDeductions = new Set();
+
+    data.forEach((record) => {
+      const allowances = record.allowances_details || [];
+      const deductions = record.deductions_details || [];
+      if (Array.isArray(allowances)) {
+        allowances.forEach((a) => uniqueAllowances.add(a.name));
+      }
+      if (Array.isArray(deductions)) {
+        deductions.forEach((d) => uniqueDeductions.add(d.name));
+      }
+    });
+
+    const allowanceNames = Array.from(uniqueAllowances).sort();
+    const deductionNames = Array.from(uniqueDeductions).sort();
+
+    // 4. Define headers
+    const fixedHeadersBeforeAllowances = ["EMP. No.", "NAME", "BASIC PAY"];
+    const fixedHeadersAfterAllowances = [
       "GROSS PAY",
       "PAYE",
       "NSSF",
       "SHIF",
-      "HELB",
-      "ADVANCE",
-      "OTHER DED.",
-      "TOTAL DED.",
-      "NET PAY (KSH.)",
+      "HOUSING LEVY",
     ];
-    worksheet.addRow(headers).eachCell((cell) => {
+    const fixedHeadersAfterDeductions = ["TOTAL DED.", "NET PAY (KSH.)"];
+
+    headers = [
+      ...fixedHeadersBeforeAllowances,
+      ...allowanceNames.map((name) => name.toUpperCase()),
+      ...fixedHeadersAfterAllowances,
+      ...deductionNames.map((name) => name.toUpperCase()),
+      ...fixedHeadersAfterDeductions,
+    ];
+
+    worksheet.addRow(headers).eachCell((cell, colNumber) => {
       cell.font = { bold: true };
       cell.alignment = { horizontal: "center" };
-       cell.fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: { argb: 'FFF0F0F0' } // Light gray background
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FFF0F0F0" }, // Light gray background
       };
       cell.border = {
-        top: { style: 'thin' },
-        left: { style: 'thin' },
-        bottom: { style: 'thin' },
-        right: { style: 'thin' }
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
       };
     });
 
-    let totalBasicPay = 0;
-    let totalHouseAll = 0;
-    let totalOT = 0;
-    let totalOtherAllowances = 0;
-    let totalGrossPay = 0;
-    let totalPaye = 0;
-    let totalNssf = 0;
-    let totalShif = 0;
-    let totalHelb = 0;
-    let totalAdvance = 0;
-    let totalOtherDeductions = 0;
-    let totalDeductions = 0;
-    let totalNetPay = 0;
+    // 5. Populate data rows and calculate totals
+    const totals = new Array(headers.length).fill(0);
+    const totalsMapping = {
+      "EMP. No.": "ignore",
+      NAME: "ignore",
+      "BASIC PAY": "basic_salary",
+      "GROSS PAY": "gross_pay",
+      PAYE: "paye_tax",
+      NSSF: "nssf_deduction",
+      SHIF: "shif_deduction",
+      "HOUSING LEVY": "housing_levy_deduction",
+      "TOTAL DED.": "total_deductions",
+      "NET PAY (KSH.)": "net_pay",
+    };
 
-    // 4. populate data rows and calculate totals
     data.forEach((record) => {
-      let housingAllowance = 0;
-      let overtime = 0;
-      let otherAllowances = 0;
-      let advanceDeduction = 0;
-      let otherDeductions = 0;
-      let totalCustomDeductions = 0;
-      // Helper function to extract allowance value
-      const allowances = record.allowances_details || [];
-      if (Array.isArray(allowances)) {
-        allowances.forEach((allowance) => {
-          if (allowance.name?.toLowerCase().includes("housing")) {
-            housingAllowance += parseFloat(allowance.value);
-          } else if (allowance.name?.toLowerCase().includes("overtime")) {
-            overtime += parseFloat(allowance.value);
-          } else {
-            otherAllowances += parseFloat(allowance.value);
-          }
-        });
-      }
+      const rowData = {};
+      const allowances = Array.isArray(record.allowances_details)
+        ? record.allowances_details
+        : JSON.parse(record.allowances_details || "[]");
+      const deductions = Array.isArray(record.deductions_details)
+        ? record.deductions_details
+        : JSON.parse(record.deductions_details || "[]");
 
-      // Helper function to extract deduction value
-      const deductions = record.deductions_details || [];
-      if (Array.isArray(deductions)) {
-        deductions.forEach((deduction) => {
-          if (deduction.name?.toLowerCase().includes("advance")) {
-            advanceDeduction += parseFloat(deduction.value);
-          } else {
-            otherDeductions += parseFloat(deduction.value);
-          }
-        });
-      }
+      // Map dynamic allowances to rowData
+      allowanceNames.forEach((name) => {
+        const allowance = allowances.find((a) => a.name === name);
+        rowData[name.toUpperCase()] = parseFloat(allowance?.value || 0);
+      });
 
-      //const housingAllowance = getAllowanceValue("housing");
-      //const overtime = getAllowanceValue("overtime");
-      //const otherAllowances = parseFloat(record.total_allowances) - housingAllowance - overtime;
-      //const helbDeduction = getDeductionValue("helb");
-      //const otherDeductions = (parseFloat(record.total_deductions) - parseFloat(record.total_statutory_deductions)) - helbDeduction;
+      // Map dynamic deductions to rowData
+      deductionNames.forEach((name) => {
+        const deduction = deductions.find((d) => d.name === name);
+        rowData[name.toUpperCase()] = parseFloat(deduction?.value || 0);
+      });
 
-      worksheet.addRow([
-        record.employee.employee_number,
-        `${record.employee.first_name} ${record.employee.last_name}`,
-        parseFloat(record.basic_salary),
-        housingAllowance,
-        overtime,
-        otherAllowances,
-         parseFloat(record.gross_pay),
-        parseFloat(record.paye_tax),
-        parseFloat(record.nssf_deduction),
-        parseFloat(record.shif_deduction),
-        parseFloat(record.helb_deduction),
-        advanceDeduction,
-        otherDeductions,
-        parseFloat(record.total_deductions),
-        parseFloat(record.net_pay),
-      ]);
+      // Construct the row array in the correct order
+      const row = [];
+      headers.forEach((header) => {
+        if (header === "EMP. No.") {
+          row.push(record.employee?.employee_number || "");
+        } else if (header === "NAME") {
+          row.push(
+            `${record.employee?.first_name || ""} ${
+              record.employee?.last_name || ""
+            }`
+          );
+        } else if (totalsMapping[header]) {
+          row.push(parseFloat(record[totalsMapping[header]] || 0));
+        } else {
+          row.push(rowData[header] || 0);
+        }
+      });
+      worksheet.addRow(row);
 
-      // Sum up totals
-      totalBasicPay += parseFloat(record.basic_salary);
-      totalHouseAll += housingAllowance;
-      totalOT += overtime;
-      totalOtherAllowances += otherAllowances;
-      totalGrossPay += parseFloat(record.gross_pay);
-      totalPaye += parseFloat(record.paye_tax);
-      totalNssf += parseFloat(record.nssf_deduction);
-      totalShif += parseFloat(record.shif_deduction);
-      totalHelb += parseFloat(record.helb_deduction);
-      totalAdvance += advanceDeduction;
-      totalOtherDeductions += otherDeductions;
-      totalDeductions += parseFloat(record.total_deductions);
-      totalNetPay += parseFloat(record.net_pay);
+      // Calculate totals
+      row.forEach((value, index) => {
+        if (index > 1 && !isNaN(parseFloat(value))) {
+          totals[index] += parseFloat(value);
+        }
+      });
     });
 
-     // 5. Add the totals row
-    worksheet.addRow([
-      "",
-      "TOTALS",
-      totalBasicPay,
-      totalHouseAll,
-      totalOT,
-      totalOtherAllowances,
-      totalGrossPay,
-      totalPaye,
-      totalNssf,
-      totalShif,
-      totalHelb,
-      totalAdvance,
-      totalOtherDeductions,
-      totalDeductions,
-      totalNetPay,
-    ]).eachCell(cell => {
+    // 6. Add the totals row
+    const totalsRow = ["", "TOTALS", ...totals.slice(2)];
+    worksheet.addRow(totalsRow).eachCell((cell) => {
       cell.font = { bold: true };
     });
 
-    worksheet.addRow([]); // Blank row for spacing
-    worksheet.addRow([]); // Blank row for spacing
-
-    // 6. Add payment summary section
-    const totalEmployees = data.length;
-    const totalCashPayment = data.filter(d => d.payment_method?.toLowerCase() === "cash").reduce((sum, d) => sum + parseFloat(d.net_pay), 0);
-    const totalBankPayment = data.filter(d => d.payment_method?.toLowerCase() === "bank").reduce((sum, d) => sum + parseFloat(d.net_pay), 0);
-    const totalMpesaPayment = data.filter(d => d.payment_method?.toLowerCase() === "m-pesa").reduce((sum, d) => sum + parseFloat(d.net_pay), 0);
-    const numCash = data.filter(d => d.payment_method?.toLowerCase() === "cash").length;
-    const numBank = data.filter(d => d.payment_method?.toLowerCase() === "bank").length;
-    const numMpesa = data.filter(d => d.payment_method?.toLowerCase() === "m-pesa").length;
-
-     worksheet.addRow([`TOTAL NO. OF EMPLOYEES: ${totalEmployees}`]);
-    worksheet.addRow([`TOTAL CASH PAYMENT: ${numCash} employees amounting to KSh. ${formatCurrency(totalCashPayment)}`]);
-    worksheet.addRow([`TOTAL BANK PAYMENT: ${numBank} employees amounting to KSh. ${formatCurrency(totalBankPayment)}`]);
-    worksheet.addRow([`TOTAL MPESA PAYMENT: ${numMpesa} employees amounting to KSh. ${formatCurrency(totalMpesaPayment)}`]);
-
-    // Apply currency formatting to relevant columns
-    const numberColumns = ['C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M', 'N', 'O'];
-    numberColumns.forEach(col => {
-      worksheet.getColumn(col).numFmt = '#,##0.00';
-    });
-
-    // Set fixed widths for key columns
-    worksheet.getColumn('A').width = 12; // Emp Code
-    worksheet.getColumn('B').width = 15;
-    worksheet.columns.forEach((column) => {
-      if (column.width < 12) {
-        column.width = 12; // Minimum width for all other columns
+    // 7. Apply number formatting
+    worksheet.columns.forEach((column, index) => {
+      if (index > 1) {
+        // Apply to all columns except EMP. No. and NAME
+        column.numFmt = "#,##0.00";
       }
     });
+
+    // 8. Adjust column widths
+    worksheet.columns.forEach((column) => {
+      const header = column.header;
+      let maxLength = 0;
+      if (header) {
+        maxLength = header.toString().length;
+      }
+      column.eachCell({ includeEmpty: true }, (cell) => {
+        const cellLength = cell.value ? cell.value.toString().length : 0;
+        if (cellLength > maxLength) {
+          maxLength = cellLength;
+        }
+      });
+      column.width = Math.max(10, Math.min(15, maxLength + 2));
+    });
+
+    // ---------- Footer Section ----------
+
+    const lastRow = worksheet.lastRow.number + 3;
+    const preparedByCell = worksheet.getCell(`B${lastRow}`);
+    preparedByCell.value =
+      "PREPARED BY: .......................................";
+    const checkedByCell = worksheet.getCell(`E${lastRow}`);
+    checkedByCell.value =
+      "CHECKED BY: ........................................";
+    const preparedDateCell = worksheet.getCell(`B${lastRow + 1}`);
+    preparedDateCell.value =
+      "DATE: ...............................................";
+    const checkedDateCell = worksheet.getCell(`E${lastRow + 1}`);
+    checkedDateCell.value =
+      "DATE: .................................................";
+    worksheet.mergeCells(`B${lastRow}:D${lastRow}`);
+    worksheet.mergeCells(
+      `E${lastRow}:${String.fromCharCode(
+        70 + headers.length - 1 - 4
+      )}${lastRow}`
+    );
+    worksheet.mergeCells(`B${lastRow + 1}:D${lastRow + 1}`);
+    worksheet.mergeCells(
+      `E${lastRow + 1}:${String.fromCharCode(70 + headers.length - 1 - 4)}${
+        lastRow + 1
+      }`
+    );
   } else if (reportType === "Allowance Report") {
     //console.log(data)
     headers = ["Employee No", "Full Name", "Allowance Name", "Amount"];
