@@ -10,6 +10,15 @@ const __dirname = path.dirname(__filename);
 
 // Always resolve relative to project root (backend/)
 const projectRoot = path.resolve(__dirname, "..", "..");
+const fontsDir = path.join(projectRoot, "fonts");
+
+// Debug log
+console.log("Looking for fonts in:", fontsDir);
+
+// Safety check
+if (!fs.existsSync(fontsDir)) {
+  console.error("❌ Fonts folder not found at:", fontsDir);
+}
 
 function formatCurrency(amount) {
   const num = parseFloat(amount);
@@ -25,15 +34,12 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
     try {
       const fonts = {
         Georgia: {
-          normal: path.join(projectRoot, "fonts", "Georgia.ttf"),
-          bold: path.join(projectRoot, "fonts", "Georgia-Bold.ttf"),
-          italics: path.join(projectRoot, "fonts", "Georgia-Italic.ttf"),
-          bolditalics: path.join(projectRoot, "fonts", "Georgia-BoldItalic.ttf"),
+          normal: path.join(fontsDir, "Georgia.ttf"),
+          bold: path.join(fontsDir, "Georgia-Bold.ttf"),
+          italics: path.join(fontsDir, "Georgia-Italic.ttf"),
+          bolditalics: path.join(fontsDir, "Georgia-BoldItalic.ttf"),
         },
       };
-
-      console.log("Looking for fonts in:", path.join(projectRoot, "fonts"));
-
 
       const printer = new PdfPrinter(fonts);
 
@@ -42,6 +48,9 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
       let logo = null;
       if (fs.existsSync(logoPath)) {
         logo = logoPath;
+      }
+      else {
+        console.warn("⚠️ KRA logo not found at:", logoPath);
       }
 
       // --- Header ---
