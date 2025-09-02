@@ -8,6 +8,9 @@ import { fileURLToPath } from 'url';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+// Always resolve relative to project root (backend/)
+const projectRoot = path.resolve(__dirname, "..");
+
 function formatCurrency(amount) {
   const num = parseFloat(amount);
   if (isNaN(num) || num === null || num === undefined) return "0.00";
@@ -22,18 +25,17 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
     try {
       const fonts = {
         Georgia: {
-          // Use __dirname to create a path relative to the current file's directory
-          normal: path.join(__dirname, "../fonts/Georgia.ttf"),
-          bold: path.join(__dirname, "../fonts/Georgia-Bold.ttf"),
-          italics: path.join(__dirname, "../fonts/Georgia-Italic.ttf"),
-          bolditalics: path.join(__dirname, "../fonts/Georgia-BoldItalic.ttf"),
+          normal: path.join(projectRoot, "fonts", "Georgia.ttf"),
+          bold: path.join(projectRoot, "fonts", "Georgia-Bold.ttf"),
+          italics: path.join(projectRoot, "fonts", "Georgia-Italic.ttf"),
+          bolditalics: path.join(projectRoot, "fonts", "Georgia-BoldItalic.ttf"),
         },
       };
 
       const printer = new PdfPrinter(fonts);
 
       // Ensure logo exists
-      const logoPath = path.join(__dirname, "../assets/images/kra_logo.png");
+      const logoPath = path.join(projectRoot, "assets", "images", "kra_logo.png");
       let logo = null;
       if (fs.existsSync(logoPath)) {
         logo = logoPath;
@@ -471,6 +473,7 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
       pdfDoc.on("end", () => resolve(Buffer.concat(chunks)));
       pdfDoc.end();
     } catch (err) {
+      console.error("Error generating P9A PDF:", err);
       reject(err);
     }
   });
