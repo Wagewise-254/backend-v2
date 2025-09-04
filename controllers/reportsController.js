@@ -705,7 +705,7 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
           row.push(
             `${record.employee?.first_name || ""} ${
               record.employee?.last_name || ""
-            }`
+            } ${record.employee?.other_names || ""}`
           );
         } else if (totalsMapping[header]) {
           row.push(parseFloat(record[totalsMapping[header]] || 0));

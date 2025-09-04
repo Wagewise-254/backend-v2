@@ -25,7 +25,7 @@ const calculatePAYE = (taxableIncome) => {
 
   // Apply personal relief
   let finalPaye = paye - personalRelief;
-  return Math.round(Math.max(0, finalPaye)); // PAYE cannot be negative
+  return Math.ceil(Math.max(0, finalPaye)); // PAYE cannot be negative
 };
 
 // NSSF Tiered Contribution (New rates)
@@ -275,7 +275,7 @@ export const calculatePayroll = async (req, res) => {
         employee.first_name,
         deductions.map((d) => d.deduction_types?.name)
       );
-
+      let processedDeductions = new Set();
       for (const deduction of deductions) {
         if (!deduction.deduction_types) {
           // You can log a warning or simply skip this deduction
@@ -284,6 +284,14 @@ export const calculatePayroll = async (req, res) => {
           );
           continue;
         }
+        // Check if this deduction name has already been processed
+        if (processedDeductions.has(deduction.deduction_types.name)) {
+          console.warn(
+            `Skipping duplicate deduction for ${employee.first_name}: ${deduction.deduction_types.name}`
+          );
+          continue;
+        }
+        processedDeductions.add(deduction.deduction_types.name);
         let deductionValue = 0;
         if (deduction.calculation_type === "Fixed") {
           deductionValue = parseFloat(deduction.value);
