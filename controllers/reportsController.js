@@ -244,58 +244,82 @@ const generateKraSecB1 = (data) => {
       }
     }
 
-    const getAllowanceValue = (name) => {
+    const getAllowanceValue = (name, isCash = false) => {
       const allowance = allowances.find((a) =>
         a.name.toLowerCase().includes(name.toLowerCase())
       );
-      return allowance ? parseFloat(allowance.value) : 0;
+      if (allowance && allowance.is_cash === isCash) {
+        return parseFloat(allowance.value);
+      }
+      return 0;
     };
 
-    const otherAllowances = allowances
-      .filter(
-        (a) =>
-          ![
-            "housing",
-            "transport",
-            "leave pay",
-            "overtime",
-            "director fee",
-            "car benefit",
-            "meals benefit",
-          ].some((n) => a.name.toLowerCase().includes(n))
-      )
+    // Non-cash allowances
+    const housingAllowance = getAllowanceValue("housing", false);
+    const carAllowance = getAllowanceValue("car", false);
+    const mealsAllowance = getAllowanceValue("meals", false);
+
+    // Other cash benefits
+    const otherCashBenefits = allowances
+      .filter((a) => a.is_cash === true)
       .reduce((sum, a) => sum + parseFloat(a.value), 0);
 
-    let resident_status =
-      record.employee.citizenship.toLowerCase() !== "kenyan"
-        ? "Non-Resident"
-        : "Resident";
-    let EmployeeDisabilityStatus = record.employee.has_disability
-      ? "Yes"
-      : "No";
+    // Other non-cash benefits
+    const otherNonCashBenefits = allowances
+      .filter((a) => !["housing", "car", "meals"].some((n) => a.name.toLowerCase().includes(n)) && a.is_cash === false)
+      .reduce((sum, a) => sum + parseFloat(a.value), 0);
+
+      // 2. Handle deductions
+    let deductions = [];
+    if (typeof record.deductions_details === "string" && record.deductions_details.trim() !== "") {
+      try {
+        deductions = JSON.parse(record.deductions_details);
+      } catch (e) {
+        console.error("Failed to parse deductions_details for record:", record.id, e);
+      }
+    }
+
+    const getDeductionValue = (name) => {
+      const deduction = deductions.find((d) => d.name.toLowerCase().includes(name.toLowerCase()));
+      return deduction ? parseFloat(deduction.value) : 0;
+    };
+    
+    const mortgageInterest = getDeductionValue("mortgage");
+
+    // 3. Determine housing benefit status
+    const housingBenefitStatus = housingAllowance > 0 ? "Employer's owned House" : "Benefit not given";
+
+    // 4. Calculate total non-cash benefits correctly
+    const totalNonCashBenefits = (record.total_non_cash_benefits || 0) - housingAllowance - carAllowance - mealsAllowance;
+
+
+   // 5. Determine resident and disability status
+    const residentStatus = record.employee.citizenship.toLowerCase() !== "kenyan" ? "Non-Resident" : "Resident";
+    const employeeDisabilityStatus = record.employee.has_disability ? "Yes" : "No";
+
 
     return [
       record.employee.krapin || "",
       `${record.employee.first_name || ""} ${
         record.employee.other_names || ""
       } ${record.employee.last_name || ""}`.trim(),
-      resident_status || "Resident",
+      residentStatus || "Resident",
       record.employee.employee_type || "Primary Employee",
-      EmployeeDisabilityStatus,
+      employeeDisabilityStatus,
       "", // remember to fill this field with exemption certificate number if any
       formatCurrency(record.basic_salary || 0),
-      formatCurrency(getAllowanceValue("car benefit")),
-      formatCurrency(getAllowanceValue("meals benefit")),
-      formatCurrency(record.total_non_cash_benefits),
-      "Benefit not given",
-      formatCurrency(getAllowanceValue("housing")),
-      formatCurrency(otherAllowances),
+      formatCurrency(carAllowance),
+      formatCurrency(mealsAllowance),
+      formatCurrency(totalNonCashBenefits),
+      housingBenefitStatus,
+       formatCurrency(housingAllowance),
+      formatCurrency(otherCashBenefits),
       "", // Blank
       formatCurrency(record.shif_deduction),
       formatCurrency(record.nssf_deduction),
       0.0, // other pension deductions not in payroll details
       0.0, // post retirement medical fund not in payroll details
-      0.0, // mortgage interest not in payroll details
+      formatCurrency(mortgageInterest),
       formatCurrency(record.housing_levy_deduction),
       "", // Blank
       2400.0,
