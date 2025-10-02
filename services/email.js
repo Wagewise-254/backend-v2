@@ -121,8 +121,6 @@ export const getP9AEmailTemplate = (employeeName, companyName, year) => {
     `;
 };
 
-
-
 /**
  * Generates a modern HTML email template for the password recovery code.
  * @param {string} recoveryCode - The 6-digit recovery code.

@@ -42,10 +42,7 @@ app.post('/api/welcome-email', async (req, res) => {
             subject: `Welcome to WageWise, ${userName}!`,
             html: `
                 <div style="font-family: Arial, sans-serif; ...">
-                    // --- PASTE YOUR FULL HTML TEMPLATE HERE ---
-                    // Remember to replace placeholders with ${userName} etc.
                     Hello ${userName}, Welcome to Wagewise!
-                    // ... rest of your beautiful email template
                 </div>
             `
         });

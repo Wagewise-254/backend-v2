@@ -661,7 +661,7 @@ export const importEmployees = async (req, res) => {
       defval: null,
     });
 
-    const headers = jsonData[0].map((h) => h.trim());
+    const headers = jsonData[0].map((h) => (h || "").trim());
     const employeesToInsert = [];
     const errors = [];
     const uniqueValues = {
