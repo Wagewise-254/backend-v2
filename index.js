@@ -29,6 +29,13 @@ app.get('/', (req, res) => {
     res.send('WageWise Backend is running!');
 });
 
+app.get('/api/ping', (req, res) => {
+  console.log('Ping received at', new Date().toISOString());
+  res.status(200).json({ message: 'pong', time: new Date().toISOString() });
+});
+
+
+
 // Endpoint to send the welcome email
 app.post('/api/welcome-email', async (req, res) => {
     const { email, userName } = req.body;
