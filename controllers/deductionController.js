@@ -55,7 +55,11 @@ function parseDate(dateStr, row, fieldName, errors) {
 export const assignDeduction = async (req, res) => {
   const { companyId } = req.params;
   const userId = req.userId;
-  const { deduction_type_id, employee_id, department_id, value, calculation_type, is_one_time = false, start_date, end_date } = req.body;
+  const { 
+    deduction_type_id, employee_id, department_id, value, 
+    calculation_type, is_recurring = true, start_month, start_year, 
+    end_month, end_year 
+  } = req.body
 
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
@@ -65,7 +69,19 @@ export const assignDeduction = async (req, res) => {
 
     const { data, error } = await supabase
       .from('deductions')
-      .insert([{ company_id: companyId, deduction_type_id, employee_id, department_id, value, calculation_type, is_one_time, start_date, end_date }])
+       .insert([{ 
+        company_id: companyId, 
+        deduction_type_id, 
+        employee_id, 
+        department_id, 
+        value, 
+        calculation_type, 
+        is_recurring, 
+        start_month, 
+        start_year, 
+        end_month, 
+        end_year 
+      }])
       .select()
       .single();
     if (error) throw error;
@@ -124,7 +140,7 @@ export const getDeductionById = async (req, res) => {
 export const updateDeduction = async (req, res) => {
   const { companyId, id } = req.params;
   const userId = req.userId;
-  const { value, calculation_type, start_date, end_date, is_active, is_one_time } = req.body;
+  const { value, calculation_type, is_recurring, start_month, start_year, end_month, end_year } = req.body;
 
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
@@ -134,7 +150,7 @@ export const updateDeduction = async (req, res) => {
 
     const { data, error } = await supabase
       .from('deductions')
-      .update({ value, calculation_type, start_date, end_date, is_active, is_one_time })
+      .update({ value, calculation_type, is_recurring, start_month, start_year, end_month, end_year })
       .eq('id', id)
       .eq('company_id', companyId)
       .select()
@@ -202,24 +218,21 @@ export const generateDeductionTemplate = async (req, res) => {
       { header: "Deduction Name", key: "deduction_name", width: 20 },
       { header: "Value", key: "value", width: 15 },
       { header: "Calculation Type", key: "calculation_type", width: 20 },
-      { header: "Is Active", key: "is_active", width: 15 },
-      { header: "Is One-Time", key: "is_one_time", width: 15 },
-      { header: "Start Date (YYYY-MM-DD)", key: "start_date", width: 25 },
-      { header: "End Date (YYYY-MM-DD)", key: "end_date", width: 25 },
+      { header: "Is Recurring (true/false)", key: "is_recurring", width: 25 }, 
+      { header: "Start Month (e.g., January)", key: "start_month", width: 25 }, 
+      { header: "Start Year (e.g., 2024)", key: "start_year", width: 25 }, 
+      { header: "End Month (Optional)", key: "end_month", width: 25 }, 
+      { header: "End Year (Optional)", key: "end_year", width: 25 }, 
     ];
 
     worksheet.columns = headers;
     worksheet.getRow(1).font = { bold: true };
 
-    // Set the date format for the date columns
-    const startDateColumn = worksheet.getColumn("start_date");
-    if (startDateColumn) {
-      startDateColumn.numFmt = "yyyy-mm-dd";
-    }
-    const endDateColumn = worksheet.getColumn("end_date");
-    if (endDateColumn) {
-      endDateColumn.numFmt = "yyyy-mm-dd";
-    }
+     // --- Dropdown Setup ---
+    const monthNames = [
+      "January", "February", "March", "April", "May", "June", 
+      "July", "August", "September", "October", "November", "December"
+    ];
 
     // Add dropdowns for 'Deduction Name', 'Calculation Type', 'Is Active', and 'Is One-Time'
     const deductionNames = deductionTypes.map((type) => type.name);
@@ -230,28 +243,19 @@ export const generateDeductionTemplate = async (req, res) => {
       worksheet.addRow([employee.employee_number]);
     });
 
-    // Add dropdowns to each cell in the relevant columns
-    for (let i = 2; i <= 1000; i++) {
-      worksheet.getCell(`B${i}`).dataValidation = {
-        type: "list",
-        allowBlank: true,
-        formulae: [`"${deductionNames.join(",")}"`],
-      };
-      worksheet.getCell(`D${i}`).dataValidation = {
-        type: "list",
-        allowBlank: true,
-        formulae: [`"${calculationTypes.join(",")}"`],
-      };
-      worksheet.getCell(`E${i}`).dataValidation = {
-        type: "list",
-        allowBlank: true,
-        formulae: [`"${isTrueFalse.join(",")}"`],
-      };
-      worksheet.getCell(`F${i}`).dataValidation = {
-        type: "list",
-        allowBlank: true,
-        formulae: [`"${isTrueFalse.join(",")}"`],
-      };
+     // Add dropdowns to each cell in the relevant columns (B-I)
+     for (let i = 2; i <= 1000; i++) {
+      // Deduction Name
+      worksheet.getCell(`B${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${deductionNames.join(",")}"`] };
+      // Calculation Type
+      worksheet.getCell(`D${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${calculationTypes.join(",")}"`] };
+      // Is Recurring
+      worksheet.getCell(`E${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${isTrueFalse.join(",")}"`] };
+      // Start Month
+      worksheet.getCell(`F${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${monthNames.join(",")}"`] };
+      // End Month
+      worksheet.getCell(`H${i}`).dataValidation = { type: "list", allowBlank: true, formulae: [`"${monthNames.join(",")}"`] };
+      // Note: Start Year (G) and End Year (I) should remain free text/number fields for flexibility.
     }
 
     res.setHeader(
@@ -275,6 +279,13 @@ export const generateDeductionTemplate = async (req, res) => {
 export const importDeductions = async (req, res) => {
   const { companyId } = req.params;
   const userId = req.userId;
+
+  const monthNames = [
+    "January", "February", "March", "April", "May", "June", 
+    "July", "August", "September", "October", "November", "December"
+  ];
+
+  const isValidMonth = (month) => monthNames.includes(month);
 
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
@@ -317,25 +328,16 @@ export const importDeductions = async (req, res) => {
     );
 
     for (const [index, row] of jsonData.entries()) {
-      const rowNumber = index + 2; // Account for header row
+     const rowNumber = index + 2;
       const employeeNumber = row["Employee Number"];
       const deductionName = row["Deduction Name"];
       const value = row["Value"];
       const calculationType = row["Calculation Type"];
-      const isActive = row["Is Active"];
-      const isOneTime = row["Is One-Time"];
-      const startDate = parseDate(
-        row["Start Date (YYYY-MM-DD)"],
-        rowNumber,
-        "Start Date",
-        errors
-      );
-      const endDate = parseDate(
-        row["End Date (YYYY-MM-DD)"],
-        rowNumber,
-        "End Date",
-        errors
-      );
+      const isRecurring = row["Is Recurring (true/false)"];
+      const startMonth = row["Start Month (e.g., January)"];
+      const startYear = row["Start Year (e.g., 2024)"];
+      const endMonth = row["End Month (Optional)"] || null; 
+      const endYear = row["End Year (Optional)"] || null; 
 
       // Validation logic
       if (
@@ -343,7 +345,9 @@ export const importDeductions = async (req, res) => {
         !deductionName ||
         !value ||
         !calculationType ||
-        !startDate
+        !startMonth ||
+        !startYear ||
+        isRecurring === undefined
       ) {
         errors.push(`Row ${rowNumber}: Required fields are missing.`);
         continue;
@@ -367,6 +371,23 @@ export const importDeductions = async (req, res) => {
         );
       }
 
+      // New Month/Year Validation
+      if (!isValidMonth(String(startMonth).trim())) {
+        errors.push(`Row ${rowNumber}: Invalid Start Month.`);
+      }
+      if (isNaN(parseInt(startYear)) || parseInt(startYear) < 1900) {
+        errors.push(`Row ${rowNumber}: Invalid Start Year.`);
+      }
+      
+      if (endMonth && !isValidMonth(String(endMonth).trim())) {
+        errors.push(`Row ${rowNumber}: Invalid End Month.`);
+      }
+      if (endYear && (isNaN(parseInt(endYear)) || parseInt(endYear) < 1900)) {
+        errors.push(`Row ${rowNumber}: Invalid End Year.`);
+      }
+
+
+
       if (errors.length === 0) {
         deductionsToUpsert.push({
           company_id: companyId,
@@ -374,10 +395,11 @@ export const importDeductions = async (req, res) => {
           employee_id: employeeId,
           value: parseFloat(value),
           calculation_type: String(calculationType).trim(),
-          is_active: String(isActive).trim().toLowerCase() === "true",
-          is_one_time: String(isOneTime).trim().toLowerCase() === "true",
-          start_date: startDate,
-          end_date: endDate,
+           is_recurring: String(isRecurring).trim().toLowerCase() === "true",
+          start_month: String(startMonth).trim(),
+          start_year: parseInt(startYear),
+          end_month: endMonth ? String(endMonth).trim() : null,
+          end_year: endYear ? parseInt(endYear) : null,
         });
       }
     }

@@ -1,7 +1,6 @@
 // backend/controllers/payrollController.js
 
 import supabase from "../libs/supabaseClient.js";
-import { getPayslipEmailTemplate } from "../services/email.js";
 import { v4 as uuidv4 } from "uuid";
 
 // --- Helper Functions for Kenyan Statutory Deductions ---
@@ -93,10 +92,10 @@ const calculateHousingLevy = (grossSalary) => {
 
 export const calculatePayroll = async (req, res) => {
   const { companyId } = req.params;
-  const { month, year } = req.body;
+  const { month: payrollMonth, year: payrollYear } = req.body;
   const userId = req.userId;
 
-  if (!month || !year) {
+  if (!payrollMonth || !payrollYear) {
     return res.status(400).json({ error: "Month and year are required." });
   }
 
@@ -106,8 +105,8 @@ export const calculatePayroll = async (req, res) => {
       .from("payroll_runs")
       .select("id, status")
       .eq("company_id", companyId)
-      .eq("payroll_month", month)
-      .eq("payroll_year", year)
+      .eq("payroll_month", payrollMonth)
+      .eq("payroll_year", payrollYear)
       .maybeSingle();
 
     if (runError && runError.code !== "PGRST116") {
@@ -133,14 +132,14 @@ export const calculatePayroll = async (req, res) => {
       .from("payroll_runs")
       .select("*", { count: "exact", head: true })
       .eq("company_id", companyId)
-      .eq("payroll_month", month)
-      .eq("payroll_year", year);
+      .eq("payroll_month", payrollMonth)
+      .eq("payroll_year", payrollYear);
 
     if (countError) throw new Error("Failed to count previous payroll runs.");
 
     const payrollCount = count || 0;
-    const payrollNumber = `PR-${year}${String(
-      new Date(`${month} 1, ${year}`).getMonth() + 1
+    const payrollNumber = `PR-${payrollYear}${String(
+      new Date(`${payrollMonth} 1, ${payrollYear}`).getMonth() + 1
     ).padStart(2, "0")}-${Date.now().toString().slice(-6)}`;
 
     // 3. Fetch all active employees for the company
@@ -177,8 +176,8 @@ export const calculatePayroll = async (req, res) => {
       id: payrollRunId,
       company_id: companyId,
       payroll_number: payrollNumber,
-      payroll_month: month,
-      payroll_year: year,
+      payroll_month: payrollMonth,
+      payroll_year: payrollYear,
       payroll_date: new Date().toISOString().split("T")[0],
       status: "Draft",
     });
@@ -191,15 +190,60 @@ export const calculatePayroll = async (req, res) => {
 
     const today = new Date().toISOString().split("T")[0];
 
+    // Helper function to check if an allowance applies to the current payroll month/year
+    const allowanceApplies = (allowance) => {
+      const isAfterStart = (
+        allowance.start_year < payrollYear || 
+        (allowance.start_year === payrollYear && monthNames.indexOf(allowance.start_month) <= monthNames.indexOf(payrollMonth))
+      );
+
+      const isBeforeEnd = allowance.end_year === null || (
+        allowance.end_year > payrollYear || 
+        (allowance.end_year === payrollYear && monthNames.indexOf(allowance.end_month) >= monthNames.indexOf(payrollMonth))
+      );
+
+      // For non-recurring allowances, it must ONLY apply if the start month/year exactly matches the payroll month/year
+      if (!allowance.is_recurring) {
+        return allowance.start_month === payrollMonth && allowance.start_year === payrollYear;
+      }
+
+      // For recurring allowances, it must be between start and end (inclusive)
+      return isAfterStart && isBeforeEnd;
+    };
+
+     // Helper function to check if a deduction applies to the current payroll month/year
+  const deductionApplies = (deduction) => {
+    const isAfterStart = (
+      deduction.start_year < payrollYear || 
+      (deduction.start_year === payrollYear && monthNames.indexOf(deduction.start_month) <= monthNames.indexOf(payrollMonth))
+    );
+
+    const isBeforeEnd = deduction.end_year === null || (
+      deduction.end_year > payrollYear || 
+      (deduction.end_year === payrollYear && monthNames.indexOf(deduction.end_month) >= monthNames.indexOf(payrollMonth))
+    );
+    
+    // For non-recurring deductions, it must ONLY apply if the start month/year exactly matches the payroll month/year
+    if (!deduction.is_recurring) {
+      return deduction.start_month === payrollMonth && deduction.start_year === payrollYear;
+    }
+
+    // For recurring deductions, it must be between start and end (inclusive)
+    return isAfterStart && isBeforeEnd;
+  };
+
+   const monthNames = [
+    "January", "February", "March", "April", "May", "June", 
+    "July", "August", "September", "October", "November", "December"
+  ];
+
     // Fetch all active allowances for the company
     const { data: allAllowances, error: allAllowancesError } = await supabase
       .from("allowances")
       .select(
         `*, allowance_types:allowance_type_id (name, is_cash, is_taxable)`
       )
-      .eq("company_id", companyId)
-      .eq("is_active", true)
-      .or(`end_date.is.null,end_date.gte.${today}`);
+      .eq("company_id", companyId);
 
     if (allAllowancesError) throw new Error("Failed to fetch allowances.");
 
@@ -209,9 +253,7 @@ export const calculatePayroll = async (req, res) => {
       .select(
         `*, deduction_types:deduction_type_id (name, is_tax_deductible, has_maximum_value, maximum_value)`
       )
-      .eq("company_id", companyId)
-      .eq("is_active", true)
-      .or(`end_date.is.null,end_date.gte.${today}`);
+      .eq("company_id", companyId);
 
     if (allDeductionsError) throw new Error("Failed to fetch deductions.");
 
@@ -231,7 +273,7 @@ export const calculatePayroll = async (req, res) => {
       const allowances = allAllowances.filter(
         (a) =>
           a.employee_id === employee.id ||
-          a.department_id === employee.department_id
+          a.department_id === employee.department_id && allowanceApplies(a)
       );
 
       for (const allowance of allowances) {
@@ -267,7 +309,7 @@ export const calculatePayroll = async (req, res) => {
       const deductions = allDeductions.filter(
         (d) =>
           d.employee_id === employee.id ||
-          d.department_id === employee.department_id
+          d.department_id === employee.department_id && deductionApplies(d)
       );
 
       console.log(
@@ -333,7 +375,7 @@ export const calculatePayroll = async (req, res) => {
       let grossPay = basicSalary + totalAllowances;
       let totalGrossPay_withNonCash = grossPay + totalNonCashBenefits;
       let nssfTiers = employee.pays_nssf
-        ? calculateNSSF(grossPay, month, year)
+        ? calculateNSSF(grossPay, payrollMonth, payrollYear)
         : { tier1: 0, tier2: 0, total: 0 };
       let nssfDeduction = nssfTiers.total;
       let shifDeduction = employee.shif_number ? calculateSHIF(grossPay) : 0;
@@ -360,7 +402,7 @@ export const calculatePayroll = async (req, res) => {
       let taxableIncome = grossPay - nssfDeduction;
 
       // Conditionally deduct SHIF and Housing Levy based on the payroll date
-      const payrollDate = new Date(`${month} 1, ${year}`);
+      const payrollDate = new Date(`${payrollMonth} 1, ${payrollYear}`);
       const deductionStartDate = new Date("December 27, 2024");
 
       // SHIF is tax-deductible from Dec 27, 2024 onwards
@@ -494,13 +536,6 @@ export const completePayrollRun = async (req, res) => {
         });
       }
     }
-
-    // Deactivate one-time deductions after completion
-    await supabase
-      .from("deductions")
-      .update({ is_active: false })
-      .eq("is_one_time", true)
-      .eq("company_id", run.company_id);
 
     // 3. Update payroll run status to 'Completed'
     const { data: completedRun, error: updateError } = await supabase
