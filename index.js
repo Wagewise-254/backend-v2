@@ -71,16 +71,13 @@ app.use('/api/companies/:companyId', statutoryRoutes);
 app.use('/api/company/:companyId', payrollRoutes);
 app.use('/api/company/:companyId', dashboardRoutes);
 app.use('/api/company/:companyId/payroll/payslip', payslipRoutes);
-app.use('/api/company/:companyId/payroll/runs', reportsRoutes);
+app.use('/api/companies/:companyId/payroll/runs', reportsRoutes);
 app.use('/api/companies/:companyId/employees', p9aRoutes);
 app.use('/api/company', hrRoutes);
 app.use('/api/company', allowanceRoutes);
 app.use('/api/company', allowanceTypeRoutes);
 app.use('/api/company', deductionRoutes);
 app.use('/api/company', deductionTypeRoutes);
-
-
-
 
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {

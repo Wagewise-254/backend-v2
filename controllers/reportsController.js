@@ -5,6 +5,46 @@ import ExcelJS from "exceljs";
 import PDFDocument from "pdfkit";
 import { stringify } from "csv-stringify";
 import fetch from "node-fetch";
+import fs from "fs";
+import path from "path";
+
+// Helper function to get all completed payroll runs for a year
+const fetchAnnualRunIds = async (companyId, year) => {
+  const { data, error } = await supabase
+    .from("payroll_runs")
+    .select("id, payroll_month")
+    .eq("company_id", companyId)
+    .eq("payroll_year", year)
+    .eq("status", "Completed");
+
+  if (error) {
+    throw new Error("Failed to fetch annual payroll runs.");
+  }
+  return data;
+};
+
+// Helper function to get annual gross pay data
+const fetchAnnualGrossPayData = async (runIds) => {
+  const runIdList = runIds.map((run) => run.id); // extract only IDs
+  if (runIdList.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from("payroll_details")
+    .select(
+      `
+                gross_pay,
+                employee:employee_id (employee_number, first_name, last_name, other_names),
+                payroll_run:payroll_run_id (payroll_month)
+            `
+    )
+    .in("payroll_run_id", runIdList);
+
+  if (error) {
+    console.error("Supabase error fetching gross pay details:", error);
+    throw new Error("Failed to fetch annual gross pay details.");
+  }
+  return data;
+};
 
 // Helper function to fetch payroll details for a given run
 const fetchPayrollData = async (companyId, runId) => {
@@ -62,6 +102,249 @@ const fetchCompanyDetails = async (companyId) => {
     throw new Error("Failed to fetch company details.");
   }
   return data;
+};
+
+//Get Available Years for Annual Report
+export const getAnnualReportYears = async (req, res) => {
+  console.log("DEBUG: getAnnualReportYears called with params:", req.params);
+  try {
+    const { companyId } = req.params;
+
+    if (!companyId) {
+      return res
+        .status(400)
+        .json({ error: "Company ID is missing in request parameters." });
+    }
+
+    // Fetch unique payroll years where the payroll run is 'Completed'
+    const { data, error } = await supabase
+      .from("payroll_runs")
+      .select("payroll_year")
+      .eq("company_id", companyId)
+      .eq("status", "Completed"); // Only completed runs are useful for the annual report
+
+    if (error) {
+      console.error("Error fetching annual report years:", error);
+      return res
+        .status(500)
+        .json({ error: "Database query failed to fetch available years." });
+    }
+
+    // Handle case with no runs
+    if (!data || data.length === 0) {
+      return res.status(200).json([]);
+    }
+
+    // Extract unique years and sort them descending (latest first)
+    const uniqueYears = [
+      ...new Set(data.map((item) => item.payroll_year)),
+    ].sort((a, b) => b - a);
+
+    // FIX: Return a clean JSON array of numbers, not an object.
+    // This resolves the 500 error caused by the frontend expecting the wrong format.
+    res.status(200).json(uniqueYears);
+  } catch (error) {
+    console.error("getAnnualReportYears error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+//Generate Annual Gross Pay Report (Excel)
+export const generateAnnualGrossEarningsReport = async (req, res) => {
+  const { companyId } = req.params;
+  const { year } = req.query;
+
+  if (!year) {
+    return res.status(400).json({ error: "Missing year parameter." });
+  }
+
+  try {
+    // 1. Fetch Company Info (for header)
+    const { data: companyData } = await supabase
+      .from("companies")
+      .select("business_name, address, company_phone, company_email")
+      .eq("id", companyId)
+      .single();
+
+    const companyInfo = companyData || {};
+
+    // 2. Payroll Data
+    const runData = await fetchAnnualRunIds(companyId, parseInt(year));
+    if (runData.length === 0)
+      return res
+        .status(404)
+        .json({ error: "No completed payroll runs found for that year." });
+
+    const rawData = await fetchAnnualGrossPayData(runData);
+
+    // 3. Transform Data
+    const employeeMap = {};
+    const MONTHS = [
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
+    ];
+
+    rawData.forEach((record) => {
+      // Use employee_number for a stable key
+      const empId = record.employee.employee_number;
+      const fullName = `${record.employee.first_name} ${
+        record.employee.last_name
+      } ${record.employee.other_names || ""}`.trim();
+      if (!employeeMap[empId]) {
+        employeeMap[empId] = {
+          "EMP. CODE": empId,
+          NAME: fullName,
+          Total: 0,
+        };
+        MONTHS.forEach((m) => (employeeMap[empId][m] = 0));
+      }
+
+      const month = record.payroll_run.payroll_month;
+      const gross = parseFloat(record.gross_pay) || 0;
+
+      // Only update if the month is valid
+      if (MONTHS.includes(month)) {
+        employeeMap[empId][month] = gross;
+        employeeMap[empId].Total += gross;
+      }
+    });
+
+    const reportData = Object.values(employeeMap);
+
+    // 4. Generate Excel Report using ExcelJS
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet(`Annual Gross Earnings ${year}`);
+
+    // 🧭 Styles
+    const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEFEF" } };
+    const borderStyle = {
+      top: { style: "thin" },
+      bottom: { style: "thin" },
+      left: { style: "thin" },
+      right: { style: "thin" },
+    };
+
+    // 🧾 A. HEADER AREA (Logo + Company Info)
+    const logoPath = path.join(process.cwd(), "assets", "logo-placeholder.png");
+    if (fs.existsSync(logoPath)) {
+      const logo = workbook.addImage({
+        filename: logoPath,
+        extension: "png",
+      });
+      sheet.addImage(logo, {
+        tl: { col: 0, row: 0 },
+        ext: { width: 100, height: 80 },
+      });
+    } else {
+      sheet.mergeCells("A1:B4");
+      sheet.getCell("A1").value = "LOGO";
+      sheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
+      sheet.getCell("A1").font = { bold: true, size: 14 };
+      sheet.getCell("A1").border = borderStyle;
+    }
+
+    sheet.mergeCells("C1:N1");
+    sheet.getCell("C1").value = `ANNUAL GROSS EARNINGS: ${year}`;
+    sheet.getCell("C1").font = { bold: true, size: 14 };
+    sheet.getCell("C1").alignment = { horizontal: "right" };
+
+    sheet.mergeCells("C2:N2");
+    sheet.getCell("C2").value = companyInfo.business_name || "COMPANY NAME";
+    sheet.getCell("C2").alignment = { horizontal: "right" };
+
+    sheet.mergeCells("C3:N3");
+    sheet.getCell("C3").value = companyInfo.address || "COMPANY ADDRESS";
+    sheet.getCell("C3").alignment = { horizontal: "right" };
+
+    sheet.mergeCells("C4:N4");
+    sheet.getCell("C4").value = `Tel: ${companyInfo.company_phone || "N/A"} | Email: ${
+      companyInfo.company_email || "N/A"
+    }`;
+    sheet.getCell("C4").alignment = { horizontal: "right" };
+
+    // 🧮 B. Table Headers
+    const startRow = 6;
+    const headers = ["EMP. CODE", "NAME", ...MONTHS.map((m) => m.slice(0, 3).toUpperCase()), "TOTAL"];
+    const headerRow = sheet.getRow(startRow);
+    headerRow.values = headers;
+    headerRow.font = { bold: true };
+    headerRow.fill = headerFill;
+    headerRow.alignment = { horizontal: "center" };
+    headerRow.border = borderStyle;
+
+    // Define column widths
+    sheet.columns = [
+      { width: 12 }, { width: 25 },
+      ...Array(12).fill({ width: 14 }), { width: 16 },
+    ];
+
+    // C. Employee Rows
+    let rowIndex = startRow + 1;
+    for (const emp of reportData) {
+      const row = sheet.getRow(rowIndex);
+      const vals = [
+        emp["EMP. CODE"], emp.NAME,
+        ...MONTHS.map((m) => emp[m]), emp.Total,
+      ];
+      row.values = vals;
+      row.alignment = { horizontal: "right" };
+      row.getCell(2).alignment = { horizontal: "left" }; // Name column left-aligned
+      row.border = borderStyle;
+      row.eachCell((cell, col) => {
+        if (col > 2) cell.numFmt = "#,##0.00";
+      });
+      rowIndex++;
+    }
+
+    // 🧮 D. Totals Row
+    const totalRow = sheet.getRow(rowIndex);
+    totalRow.getCell(1).value = "TOTALS";
+    totalRow.getCell(1).font = { bold: true };
+    totalRow.getCell(1).alignment = { horizontal: "right" };
+    totalRow.border = borderStyle;
+
+    // Calculate SUM for each month + Total
+    for (let i = 3; i <= headers.length; i++) {
+      const colLetter = sheet.getColumn(i).letter;
+      totalRow.getCell(i).value = {
+        formula: `SUM(${colLetter}${startRow + 1}:${colLetter}${rowIndex - 1})`,
+      };
+      totalRow.getCell(i).numFmt = "#,##0.00";
+      totalRow.getCell(i).font = { bold: true, color: { argb: "FF0000" } };
+    }
+
+    // 🕒 Footer
+    const footerRowIndex = rowIndex + 2;
+    sheet.mergeCells(`A${footerRowIndex}:D${footerRowIndex}`);
+    sheet.getCell(`A${footerRowIndex}`).value = `Printed on: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+    sheet.getCell(`A${footerRowIndex}`).font = { italic: true, size: 9 };
+
+    // 5. Send to client
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename=Annual_Gross_Earnings_${year}.xlsx`
+    );
+
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    console.error("Error generating annual gross earnings report:", error);
+    res.status(500).json({ error: "Failed to generate annual report." });
+  }
 };
 
 // Helper functions for each file type here
@@ -266,37 +549,59 @@ const generateKraSecB1 = (data) => {
 
     // Other non-cash benefits
     const otherNonCashBenefits = allowances
-      .filter((a) => !["housing", "car", "meals"].some((n) => a.name.toLowerCase().includes(n)) && a.is_cash === false)
+      .filter(
+        (a) =>
+          !["housing", "car", "meals"].some((n) =>
+            a.name.toLowerCase().includes(n)
+          ) && a.is_cash === false
+      )
       .reduce((sum, a) => sum + parseFloat(a.value), 0);
 
-      // 2. Handle deductions
+    // 2. Handle deductions
     let deductions = [];
-    if (typeof record.deductions_details === "string" && record.deductions_details.trim() !== "") {
+    if (
+      typeof record.deductions_details === "string" &&
+      record.deductions_details.trim() !== ""
+    ) {
       try {
         deductions = JSON.parse(record.deductions_details);
       } catch (e) {
-        console.error("Failed to parse deductions_details for record:", record.id, e);
+        console.error(
+          "Failed to parse deductions_details for record:",
+          record.id,
+          e
+        );
       }
     }
 
     const getDeductionValue = (name) => {
-      const deduction = deductions.find((d) => d.name.toLowerCase().includes(name.toLowerCase()));
+      const deduction = deductions.find((d) =>
+        d.name.toLowerCase().includes(name.toLowerCase())
+      );
       return deduction ? parseFloat(deduction.value) : 0;
     };
-    
+
     const mortgageInterest = getDeductionValue("mortgage");
 
     // 3. Determine housing benefit status
-    const housingBenefitStatus = housingAllowance > 0 ? "Employer's owned House" : "Benefit not given";
+    const housingBenefitStatus =
+      housingAllowance > 0 ? "Employer's owned House" : "Benefit not given";
 
     // 4. Calculate total non-cash benefits correctly
-    const totalNonCashBenefits = (record.total_non_cash_benefits || 0) - housingAllowance - carAllowance - mealsAllowance;
+    const totalNonCashBenefits =
+      (record.total_non_cash_benefits || 0) -
+      housingAllowance -
+      carAllowance -
+      mealsAllowance;
 
-
-   // 5. Determine resident and disability status
-    const residentStatus = record.employee.citizenship.toLowerCase() !== "kenyan" ? "Non-Resident" : "Resident";
-    const employeeDisabilityStatus = record.employee.has_disability ? "Yes" : "No";
-
+    // 5. Determine resident and disability status
+    const residentStatus =
+      record.employee.citizenship.toLowerCase() !== "kenyan"
+        ? "Non-Resident"
+        : "Resident";
+    const employeeDisabilityStatus = record.employee.has_disability
+      ? "Yes"
+      : "No";
 
     return [
       record.employee.krapin || "",
@@ -312,7 +617,7 @@ const generateKraSecB1 = (data) => {
       formatCurrency(mealsAllowance),
       formatCurrency(totalNonCashBenefits),
       housingBenefitStatus,
-       formatCurrency(housingAllowance),
+      formatCurrency(housingAllowance),
       formatCurrency(otherCashBenefits),
       "", // Blank
       formatCurrency(record.shif_deduction),
@@ -584,29 +889,31 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
     const departmentInfo = "DEPARTMENT: ALL";
 
     // Set the value of the merged cell. Use newlines for formatting.
-    const mergedCell = worksheet.getCell('A1');
-    mergedCell.value = `${companyDetails?.business_name?.toUpperCase() || 'YOUR COMPANY'}\n${mainTitle}\n${departmentInfo}`;
+    const mergedCell = worksheet.getCell("A1");
+    mergedCell.value = `${
+      companyDetails?.business_name?.toUpperCase() || "YOUR COMPANY"
+    }\n${mainTitle}\n${departmentInfo}`;
 
     // Apply styles to the merged cell
     mergedCell.font = {
       bold: true,
-      size: 14
+      size: 14,
     };
     mergedCell.alignment = {
-      horizontal: 'center',
-      vertical: 'middle',
-      wrapText: true
+      horizontal: "center",
+      vertical: "middle",
+      wrapText: true,
     };
     mergedCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFFFFFFF' }, // White background
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFFFFFFF" }, // White background
     };
     mergedCell.border = {
-      top: { style: 'none' },
-      left: { style: 'none' },
-      bottom: { style: 'none' },
-      right: { style: 'none' },
+      top: { style: "none" },
+      left: { style: "none" },
+      bottom: { style: "none" },
+      right: { style: "none" },
     };
     // 1. Company Logo
     const logoUrl = companyDetails?.logo_url;
