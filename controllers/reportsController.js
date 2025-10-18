@@ -162,7 +162,7 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
     // 1. Fetch Company Info (for header)
     const { data: companyData } = await supabase
       .from("companies")
-      .select("business_name, address, company_phone, company_email")
+      .select("business_name, address, company_phone, company_email, logo_url")
       .eq("id", companyId)
       .single();
 
@@ -219,14 +219,62 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
       }
     });
 
-    const reportData = Object.values(employeeMap);
+    const reportData = Object.values(employeeMap).sort((a, b) => {
+      // Logic to robustly compare alphanumeric employee codes
+      const codeA = a["EMP. CODE"] || "";
+      const codeB = b["EMP. CODE"] || "";
+      return codeA.localeCompare(codeB, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
 
     // 4. Generate Excel Report using ExcelJS
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet(`Annual Gross Earnings ${year}`);
 
+       //  --------- Header Section (Row 1-5) ------------
+
+       // 1. Merge cells for the header section
+    sheet.mergeCells("A1:O5");
+
+    // 2. Combine all header text into a single value for the merged cell A1
+    const mainTitle = `ANNUAL GROSS EARNINGS: ${year}`;
+
+    // Set the value of the merged cell. Use newlines for formatting.
+    const mergedCell = sheet.getCell("A1");
+    mergedCell.value = `${
+      companyInfo?.business_name?.toUpperCase() || "YOUR COMPANY"
+    }\n${mainTitle}`;
+
+    // Apply styles to the merged cell
+    mergedCell.font = {
+      bold: true,
+      size: 14,
+    };
+    mergedCell.alignment = {
+      horizontal: "center",
+      vertical: "middle",
+      wrapText: true,
+    };
+    mergedCell.fill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFFFFFFF" }, // White background
+    };
+    mergedCell.border = {
+      top: { style: "none" },
+      left: { style: "none" },
+      bottom: { style: "none" },
+      right: { style: "none" },
+    };
+
     // 🧭 Styles
-    const headerFill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFEFEFEF" } };
+    const headerFill = {
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFEFEFEF" },
+    };
     const borderStyle = {
       top: { style: "thin" },
       bottom: { style: "thin" },
@@ -235,46 +283,33 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
     };
 
     // 🧾 A. HEADER AREA (Logo + Company Info)
-    const logoPath = path.join(process.cwd(), "assets", "logo-placeholder.png");
-    if (fs.existsSync(logoPath)) {
-      const logo = workbook.addImage({
-        filename: logoPath,
-        extension: "png",
+    const logoUrl = companyInfo?.logo_url;
+    if (logoUrl) {
+      try {
+        const logoResponse = await fetch(logoUrl);
+      const logoBuffer = await logoResponse.buffer();
+      const logoImage = workbook.addImage({
+        buffer: logoBuffer,
+        extension: "jpeg",
       });
-      sheet.addImage(logo, {
-        tl: { col: 0, row: 0 },
-        ext: { width: 100, height: 80 },
-      });
-    } else {
-      sheet.mergeCells("A1:B4");
-      sheet.getCell("A1").value = "LOGO";
-      sheet.getCell("A1").alignment = { horizontal: "center", vertical: "middle" };
-      sheet.getCell("A1").font = { bold: true, size: 14 };
-      sheet.getCell("A1").border = borderStyle;
+      sheet.addImage(logoImage, {
+        tl: { col: 1, row: 1 },
+        ext: { width: 60, height: 60 },
+      });      
+      } catch (error) {
+        console.error("Failed to add logo:", error)
+      }
+      
     }
-
-    sheet.mergeCells("C1:N1");
-    sheet.getCell("C1").value = `ANNUAL GROSS EARNINGS: ${year}`;
-    sheet.getCell("C1").font = { bold: true, size: 14 };
-    sheet.getCell("C1").alignment = { horizontal: "right" };
-
-    sheet.mergeCells("C2:N2");
-    sheet.getCell("C2").value = companyInfo.business_name || "COMPANY NAME";
-    sheet.getCell("C2").alignment = { horizontal: "right" };
-
-    sheet.mergeCells("C3:N3");
-    sheet.getCell("C3").value = companyInfo.address || "COMPANY ADDRESS";
-    sheet.getCell("C3").alignment = { horizontal: "right" };
-
-    sheet.mergeCells("C4:N4");
-    sheet.getCell("C4").value = `Tel: ${companyInfo.company_phone || "N/A"} | Email: ${
-      companyInfo.company_email || "N/A"
-    }`;
-    sheet.getCell("C4").alignment = { horizontal: "right" };
 
     // 🧮 B. Table Headers
     const startRow = 6;
-    const headers = ["EMP. CODE", "NAME", ...MONTHS.map((m) => m.slice(0, 3).toUpperCase()), "TOTAL"];
+    const headers = [
+      "EMP. CODE",
+      "NAME",
+      ...MONTHS.map((m) => m.slice(0, 3).toUpperCase()),
+      "TOTAL",
+    ];
     const headerRow = sheet.getRow(startRow);
     headerRow.values = headers;
     headerRow.font = { bold: true };
@@ -284,8 +319,10 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
 
     // Define column widths
     sheet.columns = [
-      { width: 12 }, { width: 25 },
-      ...Array(12).fill({ width: 14 }), { width: 16 },
+      { width: 12 },
+      { width: 25 },
+      ...Array(12).fill({ width: 14 }),
+      { width: 16 },
     ];
 
     // C. Employee Rows
@@ -293,8 +330,10 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
     for (const emp of reportData) {
       const row = sheet.getRow(rowIndex);
       const vals = [
-        emp["EMP. CODE"], emp.NAME,
-        ...MONTHS.map((m) => emp[m]), emp.Total,
+        emp["EMP. CODE"],
+        emp.NAME,
+        ...MONTHS.map((m) => emp[m]),
+        emp.Total,
       ];
       row.values = vals;
       row.alignment = { horizontal: "right" };
@@ -307,6 +346,9 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
     }
 
     // 🧮 D. Totals Row
+    //BLANK ROW
+    rowIndex++;
+
     const totalRow = sheet.getRow(rowIndex);
     totalRow.getCell(1).value = "TOTALS";
     totalRow.getCell(1).font = { bold: true };
@@ -320,13 +362,15 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
         formula: `SUM(${colLetter}${startRow + 1}:${colLetter}${rowIndex - 1})`,
       };
       totalRow.getCell(i).numFmt = "#,##0.00";
-      totalRow.getCell(i).font = { bold: true, color: { argb: "FF0000" } };
+      totalRow.getCell(i).font = { bold: true};
     }
 
     // 🕒 Footer
     const footerRowIndex = rowIndex + 2;
     sheet.mergeCells(`A${footerRowIndex}:D${footerRowIndex}`);
-    sheet.getCell(`A${footerRowIndex}`).value = `Printed on: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+    sheet.getCell(
+      `A${footerRowIndex}`
+    ).value = `Printed on: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
     sheet.getCell(`A${footerRowIndex}`).font = { italic: true, size: 9 };
 
     // 5. Send to client
@@ -508,6 +552,16 @@ const formatCurrency = (amount) => {
 
 // Function to generate KRA SEC_B1 PAYE file (CSV)
 const generateKraSecB1 = (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
   // Define the fields for the CSV file. This acts as the header.
   const kraRecords = data.map((record) => {
     const allowancesString = record.allowances_details;
@@ -643,6 +697,16 @@ const generateKraSecB1 = (data) => {
 
 // Function to generate NSSF Return file (Excel)
 const generateNssfReturn = async (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("NSSF Return");
 
@@ -677,8 +741,17 @@ const generateNssfReturn = async (data) => {
   return buffer;
 };
 
-// ... (Add functions for other files)
 const generateShifReturn = async (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("SHIF Return");
   const headers = [
@@ -708,6 +781,16 @@ const generateShifReturn = async (data) => {
 };
 
 const generateHousingLevyReturn = (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
   const records = data.map((record) => [
     record.employee.id_number || "",
     `${record.employee.first_name || ""} ${record.employee.other_names || ""} ${
@@ -725,6 +808,17 @@ const generateHousingLevyReturn = (data) => {
 };
 
 const generateHelbReport = async (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
+
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("HELB Report");
   const headers = ["ID number", "Full Name", "Staff Number", "Amount Deducted"];
@@ -745,6 +839,16 @@ const generateHelbReport = async (data) => {
 };
 
 const generateBankPaymentFile = (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
   const records = data
     .filter((r) => r.payment_method?.toLowerCase() === "bank")
     .map((record) => [
@@ -775,6 +879,16 @@ const generateBankPaymentFile = (data) => {
 };
 
 const generateMpesaPaymentFile = (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
   const records = data
     .filter((r) => r.payment_method?.toLowerCase() === "m-pesa")
     .map((record) => [
@@ -795,6 +909,16 @@ const generateMpesaPaymentFile = (data) => {
 };
 
 const generateCashPaymentSheet = async (data) => {
+  // Sort the data array by employee number
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+
   return new Promise(async (resolve, reject) => {
     const doc = new PDFDocument({
       size: "A4",
@@ -860,6 +984,18 @@ const generateCashPaymentSheet = async (data) => {
 
 // Generic report generation (Payroll Summary, Allowance, Deduction)
 const generateGenericExcelReport = async (data, reportType, companyDetails) => {
+  // --- SORTING BLOCK ---
+  // Sort the data array by employee number for all generic reports
+  data.sort((a, b) => {
+    const codeA = a.employee?.employee_number || "";
+    const codeB = b.employee?.employee_number || "";
+    return codeA.localeCompare(codeB, undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+  });
+  // ------------------------------
+
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet(reportType);
   let headers;
