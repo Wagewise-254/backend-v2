@@ -210,6 +210,16 @@ export const generateDeductionTemplate = async (req, res) => {
       .eq("company_id", companyId);
     if (deductionTypeError) throw deductionTypeError;
 
+    // Sort employees by employee_number
+    employees.sort((a, b) => {
+      const codeA = a.employee_number || "";
+      const codeB = b.employee_number || "";
+      return codeA.localeCompare(codeB, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Deductions");
 

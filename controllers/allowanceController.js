@@ -160,7 +160,15 @@ export const getAllowanceById = async (req, res) => {
 export const updateAllowance = async (req, res) => {
   const { companyId, id } = req.params;
   const userId = req.userId;
-  const { value, calculation_type, is_recurring, start_month, start_year, end_month, end_year } = req.body;
+  const {
+    value,
+    calculation_type,
+    is_recurring,
+    start_month,
+    start_year,
+    end_month,
+    end_year,
+  } = req.body;
 
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
@@ -172,7 +180,15 @@ export const updateAllowance = async (req, res) => {
 
     const { data, error } = await supabase
       .from("allowances")
-      .update({ value, calculation_type, is_recurring, start_month, start_year, end_month, end_year })
+      .update({
+        value,
+        calculation_type,
+        is_recurring,
+        start_month,
+        start_year,
+        end_month,
+        end_year,
+      })
       .eq("id", id)
       .eq("company_id", companyId)
       .select()
@@ -235,6 +251,16 @@ export const generateAllowanceTemplate = async (req, res) => {
       .eq("company_id", companyId);
     if (allowanceTypeError) throw allowanceTypeError;
 
+    //Sort with employee number ascending
+    employees.sort((a, b) => {
+      const codeA = a.employee_number || "";
+      const codeB = b.employee_number || "";
+      return codeA.localeCompare(codeB, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+
     const workbook = new ExcelJS.Workbook();
     const worksheet = workbook.addWorksheet("Allowances");
 
@@ -243,11 +269,11 @@ export const generateAllowanceTemplate = async (req, res) => {
       { header: "Allowance Name", key: "allowance_name", width: 20 },
       { header: "Value", key: "value", width: 15 },
       { header: "Calculation Type", key: "calculation_type", width: 20 },
-     { header: "Is Recurring (true/false)", key: "is_recurring", width: 25 }, 
-      { header: "Start Month (e.g., January)", key: "start_month", width: 25 }, 
-      { header: "Start Year (e.g., 2024)", key: "start_year", width: 25 }, 
-      { header: "End Month (Optional)", key: "end_month", width: 25 }, 
-      { header: "End Year (Optional)", key: "end_year", width: 25 }, 
+      { header: "Is Recurring (true/false)", key: "is_recurring", width: 25 },
+      { header: "Start Month (e.g., January)", key: "start_month", width: 25 },
+      { header: "Start Year (e.g., 2024)", key: "start_year", width: 25 },
+      { header: "End Month (Optional)", key: "end_month", width: 25 },
+      { header: "End Year (Optional)", key: "end_year", width: 25 },
     ];
 
     worksheet.columns = headers;
@@ -255,8 +281,18 @@ export const generateAllowanceTemplate = async (req, res) => {
 
     // --- Dropdown Setup ---
     const monthNames = [
-      "January", "February", "March", "April", "May", "June", 
-      "July", "August", "September", "October", "November", "December"
+      "January",
+      "February",
+      "March",
+      "April",
+      "May",
+      "June",
+      "July",
+      "August",
+      "September",
+      "October",
+      "November",
+      "December",
     ];
 
     // Add dropdowns for 'Allowance Name' and 'Calculation Type'
@@ -289,9 +325,17 @@ export const generateAllowanceTemplate = async (req, res) => {
         formulae: [`"${isTrueFalse.join(",")}"`],
       };
       // Start Month
-      worksheet.getCell(`F${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${monthNames.join(",")}"`] };
+      worksheet.getCell(`F${i}`).dataValidation = {
+        type: "list",
+        allowBlank: false,
+        formulae: [`"${monthNames.join(",")}"`],
+      };
       // End Month
-      worksheet.getCell(`H${i}`).dataValidation = { type: "list", allowBlank: true, formulae: [`"${monthNames.join(",")}"`] };
+      worksheet.getCell(`H${i}`).dataValidation = {
+        type: "list",
+        allowBlank: true,
+        formulae: [`"${monthNames.join(",")}"`],
+      };
       // Note: Start Year (G) and End Year (I) should remain free text/number fields for flexibility.
     }
 
@@ -318,11 +362,21 @@ export const importAllowances = async (req, res) => {
   const userId = req.userId;
 
   const monthNames = [
-    "January", "February", "March", "April", "May", "June", 
-    "July", "August", "September", "October", "November", "December"
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
   ];
 
-   const isValidMonth = (month) => monthNames.includes(month);
+  const isValidMonth = (month) => monthNames.includes(month);
 
   try {
     const isAuthorized = await checkCompanyOwnership(companyId, userId);
@@ -375,8 +429,8 @@ export const importAllowances = async (req, res) => {
       const isRecurring = row["Is Recurring (true/false)"];
       const startMonth = row["Start Month (e.g., January)"];
       const startYear = row["Start Year (e.g., 2024)"];
-      const endMonth = row["End Month (Optional)"] || null; 
-      const endYear = row["End Year (Optional)"] || null; 
+      const endMonth = row["End Month (Optional)"] || null;
+      const endYear = row["End Year (Optional)"] || null;
 
       // Validation logic
       if (
@@ -384,7 +438,7 @@ export const importAllowances = async (req, res) => {
         !allowanceName ||
         !value ||
         !calculationType ||
-       !startMonth ||
+        !startMonth ||
         !startYear ||
         isRecurring === undefined
       ) {
@@ -417,7 +471,7 @@ export const importAllowances = async (req, res) => {
       if (isNaN(parseInt(startYear)) || parseInt(startYear) < 1900) {
         errors.push(`Row ${rowNumber}: Invalid Start Year.`);
       }
-      
+
       if (endMonth && !isValidMonth(String(endMonth).trim())) {
         errors.push(`Row ${rowNumber}: Invalid End Month.`);
       }
@@ -432,8 +486,8 @@ export const importAllowances = async (req, res) => {
           employee_id: employeeId,
           value: parseFloat(value),
           calculation_type: String(calculationType).trim(),
-         is_recurring: String(isRecurring).trim().toLowerCase() === "true",
-         start_month: String(startMonth).trim(),
+          is_recurring: String(isRecurring).trim().toLowerCase() === "true",
+          start_month: String(startMonth).trim(),
           start_year: parseInt(startYear),
           end_month: endMonth ? String(endMonth).trim() : null,
           end_year: endYear ? parseInt(endYear) : null,
