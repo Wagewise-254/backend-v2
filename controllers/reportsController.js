@@ -856,9 +856,8 @@ const generateBankPaymentFile = (data) => {
         record.employee.last_name
       }`.trim(),
       record.account_name,
-      // Bank code and branch code not in payroll_details, assuming these are placeholders
-      "",
-      "",
+      record.bank_code || "",
+      record.branch_code || "",
       formatCurrency(record.net_pay),
       `Payroll Ref ${record.payroll_run.payroll_number}`,
     ]);

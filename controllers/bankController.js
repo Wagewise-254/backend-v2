@@ -69,6 +69,7 @@ export const updateEmployeeBankDetails = async (req, res) => {
     bank_name,
     bank_code,
     branch_name,
+    branch_code,
     account_number,
     payment_method,
     phone_number,
@@ -102,6 +103,7 @@ export const updateEmployeeBankDetails = async (req, res) => {
           bank_name: payment_method === "Bank" ? bank_name : null,
           bank_code: payment_method === "Bank" ? bank_code : null,
           branch_name: payment_method === "Bank" ? branch_name : null,
+          branch_code: payment_method === "Bank" ? branch_code : null,
           account_number: payment_method === "Bank" ? account_number : null,
           phone_number: payment_method === "M-Pesa" ? phone_number : null,
           payment_method: payment_method,
@@ -206,6 +208,7 @@ export const generateBankDetailsTemplate = async (req, res) => {
       "Payment Method",
       "Bank Name",
       "Bank Code",
+      "Branch Code",
       "Account Number",
       "Phone Number",
     ];
@@ -261,6 +264,7 @@ export const generateBankDetailsTemplate = async (req, res) => {
         null, // Payment Method
         null, // Bank Name
         null, // Bank Code
+        null, // Branch Code
         null, // Account Number
         null, // Phone Number
       ];
@@ -308,11 +312,9 @@ export const importBankDetails = async (req, res) => {
       .single();
 
     if (companyError || !company) {
-      return res
-        .status(403)
-        .json({
-          error: "Unauthorized to import bank details to this company.",
-        });
+      return res.status(403).json({
+        error: "Unauthorized to import bank details to this company.",
+      });
     }
 
     const { data: employees, error: employeesError } = await supabase
@@ -386,6 +388,14 @@ export const importBankDetails = async (req, res) => {
               ? String(bankData["bank_code"]).trim()
               : null
             : null,
+        branch_code:
+          paymentMethod === "Bank"
+            ? bankData["branch_code"]
+              ? String(bankData["branch_code"]).trim()
+              : null
+            : null,
+        // bank_name is set to null if not bank
+        branch_name: null,
         account_number:
           paymentMethod === "Bank"
             ? bankData["account_number"]
@@ -404,12 +414,10 @@ export const importBankDetails = async (req, res) => {
     }
 
     if (errors.length > 0) {
-      return res
-        .status(400)
-        .json({
-          error: "Import failed due to validation errors.",
-          details: errors,
-        });
+      return res.status(400).json({
+        error: "Import failed due to validation errors.",
+        details: errors,
+      });
     }
 
     // Use upsert to handle new entries and updates for existing ones

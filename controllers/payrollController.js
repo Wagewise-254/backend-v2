@@ -435,12 +435,16 @@ export const calculatePayroll = async (req, res) => {
       let bankName = null;
       let accountName = null;
       let mpesaPhone = null;
+      let bankCode = null;
+      let branchCode = null;
 
       if (employeeBankDetails) {
         paymentMethod = employeeBankDetails.payment_method;
         bankName = employeeBankDetails.bank_name || null;
         accountName = employeeBankDetails.account_number || null;
         mpesaPhone = employeeBankDetails.phone_number || null;
+        bankCode = employeeBankDetails.bank_code || null;
+        branchCode = employeeBankDetails.branch_code || null;
       }
 
       // Add payroll details for this employee
@@ -469,6 +473,8 @@ export const calculatePayroll = async (req, res) => {
         allowances_details: allowancesDetails,
         deductions_details: deductionsDetails,
         insurance_relief: insuranceRelief,
+        bank_code: bankCode,
+        branch_code: branchCode,
       });
 
       totalGrossPay += totalGrossPay_withNonCash;
