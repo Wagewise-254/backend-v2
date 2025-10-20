@@ -270,11 +270,13 @@ export const calculatePayroll = async (req, res) => {
       let mortgageDeduction = 0;
 
       // Get only this employee’s or department’s allowances
-      const allowances = allAllowances.filter(
-        (a) =>
-          a.employee_id === employee.id ||
-          a.department_id === employee.department_id && allowanceApplies(a)
-      );
+      const allowances = allAllowances.filter((a) => {
+        const isEmployeeSpecific = a.employee_id === employee.id && allowanceApplies(a);
+        const isDepartmentSpecific = a.employee_id === null && a.department_id === employee.department_id && allowanceApplies(a);
+        
+        // Employee-specific allowances take precedence, or apply department-wide if not employee-specific
+        return isEmployeeSpecific || isDepartmentSpecific;
+      });
 
       for (const allowance of allowances) {
         if (!allowance.allowance_types) {
@@ -306,17 +308,14 @@ export const calculatePayroll = async (req, res) => {
       }
 
       // Get only this employee’s or department’s deductions
-      const deductions = allDeductions.filter(
-        (d) =>
-          d.employee_id === employee.id ||
-          d.department_id === employee.department_id && deductionApplies(d)
-      );
+      const deductions = allDeductions.filter((d) => {
+        const isEmployeeSpecific = d.employee_id === employee.id && deductionApplies(d);
+        const isDepartmentSpecific = d.employee_id === null && d.department_id === employee.department_id && deductionApplies(d);
 
-      console.log(
-        "Deductions for",
-        employee.first_name,
-        deductions.map((d) => d.deduction_types?.name)
-      );
+        // Employee-specific deductions take precedence, or apply department-wide if not employee-specific
+        return isEmployeeSpecific || isDepartmentSpecific;
+      });
+      
       let processedDeductions = new Set();
       for (const deduction of deductions) {
         if (!deduction.deduction_types) {
