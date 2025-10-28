@@ -5,6 +5,29 @@ import { v4 as uuidv4 } from "uuid";
 
 // --- Helper Functions for Kenyan Statutory Deductions ---
 
+// Define monthNames globally so all helpers can access it
+const monthNames = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+// This function returns the last day of the payroll month for comparison
+const getPayrollRunDate = (month, year) => {
+  // Date constructor (year, monthIndex + 1, day = 0) returns the last day of the previous month
+  // We use (year, monthIndex + 1, 0) to get the last day of the target month
+  return new Date(year, monthNames.indexOf(month) + 1, 0);
+};
+
 // As of 2024/2025 financial year
 const calculatePAYE = (taxableIncome) => {
   let paye = 0;
@@ -35,20 +58,6 @@ const calculateNSSF = (basicSalary, payrollMonth, payrollYear) => {
   let tier1_deduction = 0;
   let tier2_deduction = 0;
 
-  const monthNames = [
-    "January",
-    "February",
-    "March",
-    "April",
-    "May",
-    "June",
-    "July",
-    "August",
-    "September",
-    "October",
-    "November",
-    "December",
-  ];
   const payrollMonthIndex = monthNames.indexOf(payrollMonth);
   if (payrollYear > 2025 || (payrollYear === 2025 && payrollMonthIndex >= 1)) {
     // February 2025 onwards
@@ -146,21 +155,69 @@ export const calculatePayroll = async (req, res) => {
     const { data: employees, error: employeesError } = await supabase
       .from("employees")
       .select("*")
-      .eq("company_id", companyId)
-      .eq("employee_status", "Active");
+      .eq("company_id", companyId);
 
     if (employeesError) throw new Error("Failed to fetch employees.");
+
     if (employees.length === 0) {
-      return res.status(404).json({ message: "No active employees found." });
+      return res
+        .status(404)
+        .json({ message: "No employees found for the company." });
     }
 
-    // 4. Fetch all employee bank details
+    // ---  Filter Employees by Historical Eligibility ---
+    const payrollRunDate = getPayrollRunDate(payrollMonth, payrollYear);
+    const eligibleEmployees = employees.filter((employee) => {
+      const dateJoined = new Date(employee.date_joined);
+
+      // 1. Employee must have joined on or before the payroll month's end date.
+      if (dateJoined > payrollRunDate) {
+        return false;
+      }
+
+      // 2. Check the employee's status effective date relative to the payroll period.
+      const employeeStatus = employee.employee_status;
+      const statusEffectiveDate = new Date(
+        employee.employee_status_effective_date
+      );
+
+      // Statuses that generally require payroll processing:
+      const isIncludedStatus =
+        employeeStatus === "Active" || employeeStatus === "On Leave";
+
+      // Statuses that exclude payroll processing:
+      const isExcludedStatus =
+        employeeStatus === "Terminated" ||
+        employeeStatus === "Suspended" ||
+        employeeStatus === "Retired";
+
+      // If the employee's *current* status is an excluded one, we check *when* it became effective.
+      if (isExcludedStatus) {
+        // If the termination/exclusion was effective ON or BEFORE the payroll run date, EXCLUDE.
+        if (statusEffectiveDate <= payrollRunDate) {
+          return false;
+        }
+      }
+
+      // If the status is one of the excluded ones, but the effective date is *after* the payroll run date,
+      // the employee was still eligible for this historical run (e.g., terminated in June, running Feb payroll).
+
+      return true; // Employee is eligible (joined on time, and not excluded by status effective date)
+    });
+
+    if (eligibleEmployees.length === 0) {
+      return res.status(404).json({
+        message: "No eligible employees found for this payroll period.",
+      });
+    }
+
+    // 4. Fetch all employee bank details for the *eligible* employees
     const { data: bankDetails, error: bankDetailsError } = await supabase
       .from("employee_bank_details")
       .select("*")
       .in(
         "employee_id",
-        employees.map((emp) => emp.id)
+        eligibleEmployees.map((emp) => emp.id)
       );
 
     if (bankDetailsError)
@@ -192,50 +249,57 @@ export const calculatePayroll = async (req, res) => {
 
     // Helper function to check if an allowance applies to the current payroll month/year
     const allowanceApplies = (allowance) => {
-      const isAfterStart = (
-        allowance.start_year < payrollYear || 
-        (allowance.start_year === payrollYear && monthNames.indexOf(allowance.start_month) <= monthNames.indexOf(payrollMonth))
-      );
+      const isAfterStart =
+        allowance.start_year < payrollYear ||
+        (allowance.start_year === payrollYear &&
+          monthNames.indexOf(allowance.start_month) <=
+            monthNames.indexOf(payrollMonth));
 
-      const isBeforeEnd = allowance.end_year === null || (
-        allowance.end_year > payrollYear || 
-        (allowance.end_year === payrollYear && monthNames.indexOf(allowance.end_month) >= monthNames.indexOf(payrollMonth))
-      );
+      const isBeforeEnd =
+        allowance.end_year === null ||
+        allowance.end_year > payrollYear ||
+        (allowance.end_year === payrollYear &&
+          monthNames.indexOf(allowance.end_month) >=
+            monthNames.indexOf(payrollMonth));
 
       // For non-recurring allowances, it must ONLY apply if the start month/year exactly matches the payroll month/year
       if (!allowance.is_recurring) {
-        return allowance.start_month === payrollMonth && allowance.start_year === payrollYear;
+        return (
+          allowance.start_month === payrollMonth &&
+          allowance.start_year === payrollYear
+        );
       }
 
       // For recurring allowances, it must be between start and end (inclusive)
       return isAfterStart && isBeforeEnd;
     };
 
-     // Helper function to check if a deduction applies to the current payroll month/year
-  const deductionApplies = (deduction) => {
-    const isAfterStart = (
-      deduction.start_year < payrollYear || 
-      (deduction.start_year === payrollYear && monthNames.indexOf(deduction.start_month) <= monthNames.indexOf(payrollMonth))
-    );
+    // Helper function to check if a deduction applies to the current payroll month/year
+    const deductionApplies = (deduction) => {
+      const isAfterStart =
+        deduction.start_year < payrollYear ||
+        (deduction.start_year === payrollYear &&
+          monthNames.indexOf(deduction.start_month) <=
+            monthNames.indexOf(payrollMonth));
 
-    const isBeforeEnd = deduction.end_year === null || (
-      deduction.end_year > payrollYear || 
-      (deduction.end_year === payrollYear && monthNames.indexOf(deduction.end_month) >= monthNames.indexOf(payrollMonth))
-    );
-    
-    // For non-recurring deductions, it must ONLY apply if the start month/year exactly matches the payroll month/year
-    if (!deduction.is_recurring) {
-      return deduction.start_month === payrollMonth && deduction.start_year === payrollYear;
-    }
+      const isBeforeEnd =
+        deduction.end_year === null ||
+        deduction.end_year > payrollYear ||
+        (deduction.end_year === payrollYear &&
+          monthNames.indexOf(deduction.end_month) >=
+            monthNames.indexOf(payrollMonth));
 
-    // For recurring deductions, it must be between start and end (inclusive)
-    return isAfterStart && isBeforeEnd;
-  };
+      // For non-recurring deductions, it must ONLY apply if the start month/year exactly matches the payroll month/year
+      if (!deduction.is_recurring) {
+        return (
+          deduction.start_month === payrollMonth &&
+          deduction.start_year === payrollYear
+        );
+      }
 
-   const monthNames = [
-    "January", "February", "March", "April", "May", "June", 
-    "July", "August", "September", "October", "November", "December"
-  ];
+      // For recurring deductions, it must be between start and end (inclusive)
+      return isAfterStart && isBeforeEnd;
+    };
 
     // Fetch all active allowances for the company
     const { data: allAllowances, error: allAllowancesError } = await supabase
@@ -257,8 +321,8 @@ export const calculatePayroll = async (req, res) => {
 
     if (allDeductionsError) throw new Error("Failed to fetch deductions.");
 
-    // 6. Loop through each employee and calculate payroll
-    for (const employee of employees) {
+    // 6. Loop through each eligible employee and calculate payroll
+    for (const employee of eligibleEmployees) {
       let basicSalary = parseFloat(employee.salary);
       let totalAllowances = 0;
       let totalNonCashBenefits = 0;
@@ -271,9 +335,13 @@ export const calculatePayroll = async (req, res) => {
 
       // Get only this employee’s or department’s allowances
       const allowances = allAllowances.filter((a) => {
-        const isEmployeeSpecific = a.employee_id === employee.id && allowanceApplies(a);
-        const isDepartmentSpecific = a.employee_id === null && a.department_id === employee.department_id && allowanceApplies(a);
-        
+        const isEmployeeSpecific =
+          a.employee_id === employee.id && allowanceApplies(a);
+        const isDepartmentSpecific =
+          a.employee_id === null &&
+          a.department_id === employee.department_id &&
+          allowanceApplies(a);
+
         // Employee-specific allowances take precedence, or apply department-wide if not employee-specific
         return isEmployeeSpecific || isDepartmentSpecific;
       });
@@ -309,13 +377,17 @@ export const calculatePayroll = async (req, res) => {
 
       // Get only this employee’s or department’s deductions
       const deductions = allDeductions.filter((d) => {
-        const isEmployeeSpecific = d.employee_id === employee.id && deductionApplies(d);
-        const isDepartmentSpecific = d.employee_id === null && d.department_id === employee.department_id && deductionApplies(d);
+        const isEmployeeSpecific =
+          d.employee_id === employee.id && deductionApplies(d);
+        const isDepartmentSpecific =
+          d.employee_id === null &&
+          d.department_id === employee.department_id &&
+          deductionApplies(d);
 
         // Employee-specific deductions take precedence, or apply department-wide if not employee-specific
         return isEmployeeSpecific || isDepartmentSpecific;
       });
-      
+
       let processedDeductions = new Set();
       for (const deduction of deductions) {
         if (!deduction.deduction_types) {

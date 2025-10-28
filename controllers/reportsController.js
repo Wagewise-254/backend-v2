@@ -671,7 +671,7 @@ const generateKraSecB1 = (data) => {
       formatCurrency(mealsAllowance),
       formatCurrency(totalNonCashBenefits),
       housingBenefitStatus,
-      formatCurrency(housingAllowance),
+      formatCurrency(housingAllowance) || "",
       formatCurrency(otherCashBenefits),
       "", // Blank
       formatCurrency(record.shif_deduction),
