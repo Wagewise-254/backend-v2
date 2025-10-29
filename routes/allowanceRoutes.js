@@ -6,7 +6,8 @@ import {
   updateAllowance,
   removeAllowance,
   generateAllowanceTemplate,
-  importAllowances 
+  importAllowances,
+  bulkDeleteAllowances
 } from '../controllers/allowanceController.js';
 import verifyToken from '../middleware/auth.js';
 import multer from 'multer';
@@ -20,6 +21,7 @@ router.get('/:companyId/allowances/template', verifyToken, generateAllowanceTemp
 router.get('/:companyId/allowances/:id', verifyToken, getAllowanceById);
 router.put('/:companyId/allowances/:id', verifyToken, updateAllowance);
 router.delete('/:companyId/allowances/:id', verifyToken, removeAllowance);
+router.post('/:companyId/allowances/bulk', verifyToken, bulkDeleteAllowances); // New route for bulk deletion
 router.post('/:companyId/allowances/import', verifyToken, upload.single('file'), importAllowances); // New route for file upload
 
 export default router;

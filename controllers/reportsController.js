@@ -233,9 +233,9 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet(`Annual Gross Earnings ${year}`);
 
-       //  --------- Header Section (Row 1-5) ------------
+    //  --------- Header Section (Row 1-5) ------------
 
-       // 1. Merge cells for the header section
+    // 1. Merge cells for the header section
     sheet.mergeCells("A1:O5");
 
     // 2. Combine all header text into a single value for the merged cell A1
@@ -287,19 +287,18 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
     if (logoUrl) {
       try {
         const logoResponse = await fetch(logoUrl);
-      const logoBuffer = await logoResponse.buffer();
-      const logoImage = workbook.addImage({
-        buffer: logoBuffer,
-        extension: "jpeg",
-      });
-      sheet.addImage(logoImage, {
-        tl: { col: 1, row: 1 },
-        ext: { width: 60, height: 60 },
-      });      
+        const logoBuffer = await logoResponse.buffer();
+        const logoImage = workbook.addImage({
+          buffer: logoBuffer,
+          extension: "jpeg",
+        });
+        sheet.addImage(logoImage, {
+          tl: { col: 1, row: 1 },
+          ext: { width: 60, height: 60 },
+        });
       } catch (error) {
-        console.error("Failed to add logo:", error)
+        console.error("Failed to add logo:", error);
       }
-      
     }
 
     // 🧮 B. Table Headers
@@ -362,7 +361,7 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
         formula: `SUM(${colLetter}${startRow + 1}:${colLetter}${rowIndex - 1})`,
       };
       totalRow.getCell(i).numFmt = "#,##0.00";
-      totalRow.getCell(i).font = { bold: true};
+      totalRow.getCell(i).font = { bold: true };
     }
 
     // 🕒 Footer
@@ -818,7 +817,6 @@ const generateHelbReport = async (data) => {
     });
   });
 
-
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet("HELB Report");
   const headers = ["ID number", "Full Name", "Staff Number", "Amount Deducted"];
@@ -996,10 +994,13 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
   // ------------------------------
 
   const workbook = new ExcelJS.Workbook();
-  const worksheet = workbook.addWorksheet(reportType);
+  //const worksheet = workbook.addWorksheet(reportType);
   let headers;
 
   if (reportType === "Payroll Summary") {
+    // We add the single sheet here instead of globally
+    const worksheet = workbook.addWorksheet(reportType);
+
     // Check if data is available to prevent errors on empty reports
     if (!data || data.length === 0) {
       return await workbook.xlsx.writeBuffer();
@@ -1247,8 +1248,8 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
       }`
     );
   } else if (reportType === "Allowance Report") {
-    //console.log(data)
-    headers = ["Employee No", "Full Name", "Allowance Name", "Amount"];
+    const worksheet = workbook.addWorksheet(reportType);
+     headers = ["Employee No", "Full Name", "Allowance Name", "Amount"];
     worksheet.addRow(headers);
     data.forEach((record) => {
       const allowances = record.allowances_details || [];
@@ -1264,7 +1265,7 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
       }
     });
   } else if (reportType === "Deduction Report") {
-    //console.log(data);
+    const worksheet = workbook.addWorksheet(reportType);
     headers = ["Employee No", "Full Name", "Deduction Name", "Amount"];
     worksheet.addRow(headers);
     data.forEach((record) => {

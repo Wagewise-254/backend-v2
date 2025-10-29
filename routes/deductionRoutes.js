@@ -6,7 +6,8 @@ import {
   updateDeduction,
   removeDeduction,
   generateDeductionTemplate,
-  importDeductions
+  importDeductions,
+  bulkDeleteDeductions
 } from '../controllers/deductionController.js';
 import verifyToken from '../middleware/auth.js';
 import multer from 'multer';
@@ -20,6 +21,7 @@ router.get('/:companyId/deductions/template', verifyToken, generateDeductionTemp
 router.get('/:companyId/deductions/:id', verifyToken, getDeductionById);
 router.put('/:companyId/deductions/:id', verifyToken, updateDeduction);
 router.delete('/:companyId/deductions/:id', verifyToken, removeDeduction);
+router.post('/:companyId/deductions/bulk', verifyToken, bulkDeleteDeductions);
 router.post('/:companyId/deductions/import', verifyToken, upload.single('file'), importDeductions); 
 
 export default router;

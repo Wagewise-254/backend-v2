@@ -2,7 +2,7 @@
 import supabase from '../libs/supabaseClient.js'
 
 const verifyToken = async (req, res, next) => {
-  const token = req.headers.authorization?.split(' ')[1]; // Extract token from "Bearer <token>"
+  const token = req.headers.authorization?.split(' ')[1] || req.query.token;
 
   if (!token) {
     return res.status(401).json({ error: 'No token provided.' });
@@ -18,6 +18,7 @@ const verifyToken = async (req, res, next) => {
 
     // Attach the user ID to the request object
     req.userId = data.user.id;
+    req.user = data.user;
     next();
   } catch (error) {
     console.error('Token verification failed:', error);

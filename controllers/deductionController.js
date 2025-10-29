@@ -184,6 +184,42 @@ export const removeDeduction = async (req, res) => {
   }
 };
 
+// bulk delete
+export const bulkDeleteDeductions = async (req, res) => {
+  const { companyId } = req.params;
+  const { deductionIds } = req.body; // Expecting an array of IDs in the body
+  const userId = req.user.id; 
+
+  if (!deductionIds || !Array.isArray(deductionIds) || deductionIds.length === 0) {
+    return res.status(400).json({ error: "No deduction IDs provided for deletion." });
+  }
+
+  // 1. Check company ownership - Assuming checkCompanyOwnership is available in this file
+  const isOwner = await checkCompanyOwnership(companyId, userId);
+  if (!isOwner) {
+    return res.status(403).json({ error: "Unauthorized. User is not the owner of this company or company does not exist." });
+  }
+
+  try {
+    // 2. Perform bulk delete
+    const { error } = await supabase
+      .from("deductions")
+      .delete()
+      .in("id", deductionIds) // Filter by the array of IDs
+      .eq("company_id", companyId); // Ensure only deductions for the company are deleted
+
+    if (error) {
+      console.error("Bulk delete deductions error:", error);
+      return res.status(500).json({ error: "Failed to delete deductions." });
+    }
+
+    res.status(200).json({ message: `${deductionIds.length} deduction(s) deleted successfully.` });
+  } catch (error) {
+    console.error("Bulk delete deductions general error:", error);
+    res.status(500).json({ error: "An unexpected error occurred during bulk deletion." });
+  }
+};
+
 // GENERATE TEMPLATE FOR BULK DEDUCTION IMPORT
 export const generateDeductionTemplate = async (req, res) => {
   const { companyId } = req.params;

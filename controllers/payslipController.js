@@ -6,6 +6,7 @@ import { sendEmail, getPayslipEmailTemplate } from '../services/email.js';
 
 export const generatePayslipPdf = async (req, res) => {
   const { companyId, payrollDetailId } = req.params;
+  const { preview } = req.query;
 
   if (!payrollDetailId || !companyId) {
     return res.status(400).json({ error: 'Payroll detail ID and Company ID are required.' });
@@ -62,11 +63,20 @@ export const generatePayslipPdf = async (req, res) => {
     // Generate PDF buffer using your utils generator
     const pdfBuffer = await generatePayslipPDF(details, formattedPeriod, company, employee);
 
-    // Filename: Payslip_First_Last_Month_Year.pdf
-    const fileName = `Payslip_${employee.first_name}_${employee.last_name}_${payroll_run.payroll_month}_${payroll_run.payroll_year}.pdf`;
 
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    // 2. Control the Content-Disposition header
+    if (preview === 'true') {
+        // This tells the browser to display the content inline (preview)
+        res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"'); 
+    } else {
+        // This triggers a download box
+        // Filename: Payslip_First_Last_Month_Year.pdf
+        const fileName = `Payslip_${employee.first_name}_${employee.last_name}_${payroll_run.payroll_month}_${payroll_run.payroll_year}.pdf`;
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    }
+
     res.send(pdfBuffer);
 
   } catch (err) {

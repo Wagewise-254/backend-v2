@@ -5,6 +5,7 @@ import { sendEmail, getP9AEmailTemplate } from '../services/email.js';
 
 export const generateP9APdf = async (req, res) => {
   const { companyId, employeeId, year } = req.params;
+  const { preview } = req.query;
 
   if (!companyId || !employeeId || !year) {
     return res.status(400).json({ error: 'Company ID, Employee ID, and Year are required.' });
@@ -51,11 +52,20 @@ export const generateP9APdf = async (req, res) => {
     // Generate PDF buffer using the utility generator
     const pdfBuffer = await generateP9APDF(payrollData, firstRecord.employee, firstRecord.payroll_run.company, year);
 
-    // Filename: P9A_First_Last_Year.pdf
-    const fileName = `P9A_${firstRecord.employee.first_name}_${firstRecord.employee.last_name}_${year}.pdf`;
-
+    // 1. Set the correct MIME type
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+
+    // 2. Control the Content-Disposition header
+    if (preview === 'true') {
+        // This tells the browser to display the content inline (preview)
+        res.setHeader('Content-Disposition', 'inline; filename="preview.pdf"'); 
+    } else {
+        // This triggers a download box
+            // Filename: P9A_First_Last_Year.pdf
+        const fileName = `P9A_${firstRecord.employee.first_name}_${firstRecord.employee.last_name}_${year}.pdf`;
+        res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    }
+
     res.send(pdfBuffer);
 
   } catch (error) {

@@ -225,6 +225,42 @@ export const removeAllowance = async (req, res) => {
   }
 };
 
+//bulk delete
+export const bulkDeleteAllowances = async (req, res) => {
+  const { companyId } = req.params;
+  const { allowanceIds } = req.body; // Expecting an array of allowance IDs
+  const userId = req.userId;
+
+  if (!allowanceIds || !Array.isArray(allowanceIds) || allowanceIds.length === 0) {
+    return res.status(400).json({ error: "No allowance IDs provided for deletion." });
+  }
+  
+
+  try {
+    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    if (!isAuthorized) {
+      return res
+        .status(403)
+        .json({ error: "Unauthorized to delete allowances for this company." });
+    }
+
+    const { error } = await supabase
+      .from("allowances")
+      .delete()
+      .in("id", allowanceIds)
+      .eq("company_id", companyId);
+    if (error){ 
+      console.error("Bulk delete allowances error:", error);
+      return res.status(500).json({ error: "Failed to remove allowances" });
+    }
+
+    res.status(200).json({ message: `${allowanceIds.length} allowance(s) deleted successfully.` });
+  } catch (err) {
+    console.error("Bulk delete allowances controller error:", err);
+    res.status(500).json({ error: "An unexpected error occurred during bulk deletion." });
+  }
+};
+
 // GENERATE TEMPLATE FOR BULK ALLOWANCE IMPORT
 export const generateAllowanceTemplate = async (req, res) => {
   const { companyId } = req.params;

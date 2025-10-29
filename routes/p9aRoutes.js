@@ -47,7 +47,7 @@ const router = express.Router({ mergeParams: true });
  * 500:
  * description: Server error.
  */
-router.get('/:employeeId/p9a/:year', verifyToken, generateP9APdf);
+router.get('/:employeeId/p9a/:year', verifyToken,  generateP9APdf);
 
 // Define the new route to email the P9A
 router.post('/:employeeId/p9a/:year/email', verifyToken, emailP9A);
