@@ -152,11 +152,17 @@ export const getAnnualReportYears = async (req, res) => {
 //Generate Annual Gross Pay Report (Excel)
 export const generateAnnualGrossEarningsReport = async (req, res) => {
   const { companyId } = req.params;
-  const { year } = req.query;
+  const { year, download } = req.query;
 
   if (!year) {
     return res.status(400).json({ error: "Missing year parameter." });
   }
+
+  // --- Helper to set the disposition header
+  const getDisposition = (filename, isDownload) => {
+    const dispositionType = isDownload === "true" || isDownload === undefined ? "attachment" : "inline";
+    return `${dispositionType}; filename="${filename}"`;
+  };
 
   try {
     // 1. Fetch Company Info (for header)
@@ -379,7 +385,7 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
     );
     res.setHeader(
       "Content-Disposition",
-      `attachment; filename=Annual_Gross_Earnings_${year}.xlsx`
+      getDisposition(`Annual_Gross_Earnings_${year}.xlsx`, download)
     );
 
     await workbook.xlsx.write(res);
@@ -393,10 +399,17 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
 // Helper functions for each file type here
 export const generateReport = async (req, res) => {
   const { companyId, runId, reportType } = req.params;
+  const { download } = req.query;
 
   if (!companyId || !runId || !reportType) {
     return res.status(400).json({ error: "Missing required parameters." });
   }
+
+  // --- Helper to set the disposition header
+  const getDisposition = (filename, isDownload) => {
+    const dispositionType = isDownload === "true" || isDownload === undefined ? "attachment" : "inline";
+    return `${dispositionType}; filename="${filename}"`;
+  };
 
   try {
     const payrollData = await fetchPayrollData(companyId, runId);
@@ -412,7 +425,7 @@ export const generateReport = async (req, res) => {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="KRA_SEC_B1_${runId}.csv"`
+          getDisposition(`KRA_SEC_B1_${runId}.csv`, download)
         );
         res.end(Buffer.from(kraCsv, "utf-8"));
         break;
@@ -425,7 +438,7 @@ export const generateReport = async (req, res) => {
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="NSSF_Return_${runId}.xlsx"`
+          getDisposition(`NSSF_Return_${runId}.xlsx`, download)
         );
         res.send(nssfExcelBuffer);
         break;
@@ -437,7 +450,7 @@ export const generateReport = async (req, res) => {
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="SHIF_Return_${runId}.xlsx"`
+          getDisposition(`SHIF_Return_${runId}.xlsx`, download)
         );
         res.send(shifExcelBuffer);
         break;
@@ -446,7 +459,7 @@ export const generateReport = async (req, res) => {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="Housing_Levy_${runId}.csv"`
+          getDisposition(`Housing_Levy_${runId}.csv`, download)
         );
         res.end(Buffer.from(housingLevyCsv, "utf-8"));
         break;
@@ -458,7 +471,7 @@ export const generateReport = async (req, res) => {
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="HELB_Report_${runId}.xlsx"`
+          getDisposition(`HELB_Report_${runId}.xlsx`, download)
         );
         res.send(helbExcelBuffer);
         break;
@@ -467,7 +480,7 @@ export const generateReport = async (req, res) => {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="Bank_Payments_${runId}.csv"`
+          getDisposition(`Bank_Payments_${runId}.csv`, download)
         );
         res.end(Buffer.from(bankCsv, "utf-8"));
         break;
@@ -476,7 +489,7 @@ export const generateReport = async (req, res) => {
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="M-Pesa_Payments_${runId}.csv"`
+          getDisposition(`M-Pesa_Payments_${runId}.csv`, download)
         );
         res.end(Buffer.from(mpesaCsv, "utf-8"));
         break;
@@ -485,7 +498,7 @@ export const generateReport = async (req, res) => {
         res.setHeader("Content-Type", "application/pdf");
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="Cash_Sheet_${runId}.pdf"`
+          getDisposition(`Cash_Sheet_${runId}.pdf`, download)
         );
         res.send(cashPdfBuffer);
         break;
@@ -501,7 +514,7 @@ export const generateReport = async (req, res) => {
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="Payroll_Summary_${runId}.xlsx"`
+          getDisposition(`Payroll_Summary_${runId}.xlsx`, download)
         );
         res.send(summaryExcelBuffer);
         break;
@@ -516,7 +529,7 @@ export const generateReport = async (req, res) => {
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="Allowance_Report_${runId}.xlsx"`
+          getDisposition(`Allowance_Report_${runId}.xlsx`, download)
         );
         res.send(allowanceExcelBuffer);
         break;
@@ -531,7 +544,7 @@ export const generateReport = async (req, res) => {
         );
         res.setHeader(
           "Content-Disposition",
-          `attachment; filename="Deduction_Report_${runId}.xlsx"`
+          getDisposition(`Deduction_Report_${runId}.xlsx`, download)
         );
         res.send(deductionExcelBuffer);
         break;
