@@ -1,16 +1,10 @@
 // backend/email.js
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import dotenv from "dotenv";
 
 dotenv.config();
 
-const transporter = nodemailer.createTransport({
-  service: "gmail", // Or another email provider
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASSWORD,
-  },
-});
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 /**
  * Sends an email using the configured Nodemailer transporter.
@@ -23,31 +17,31 @@ const transporter = nodemailer.createTransport({
  */
 
 export const sendEmail = async (options) => {
-  if (!process.env.EMAIL_USER || !process.env.EMAIL_PASSWORD) {
-    console.error(
-      "Email service not configured. Missing EMAIL_USER or EMAIL_APP_PASSWORD."
-    );
+  if (!process.env.RESEND_API_KEY) {
+    console.error("Missing RESEND_API_KEY");
     throw new Error("Email service configuration missing.");
   }
+
   try {
-    const mailOptions = {
-      from: `"WageWise" <${process.env.EMAIL_USER}>`,
+    const response = await resend.emails.send({
+      from: process.env.EMAIL_FROM || "WageWise <onboarding@resend.dev>",
       to: options.to,
       subject: options.subject,
-      text: options.text,
       html: options.html,
-      attachments: options.attachments || [], // support attachments
-    };
-    if (mailOptions.attachments.length > 0) {
-      console.log(`Sending email to ${options.to} with ${mailOptions.attachments.length} attachment(s).`);
+      text: options.text,
+      attachments: options.attachments?.map((att) => ({
+        filename: att.filename,
+        content: att.content, // Buffer is OK
+      })),
+    });
+    if (response.attachments.length > 0) {
+      console.log(`Sending email to ${options.to} with ${response.attachments.length} attachment(s).`);
     }
 
-    const info = await transporter.sendMail(mailOptions);
-    console.log(`Email sent successfully to ${options.to}: ${info.messageId}`);
-    return info;
+    console.log(`Email sent to ${options.to}:`, response.id);
+    return response;
   } catch (error) {
     console.error(`Error sending email to ${options.to}:`, error.message);
-    // Rethrow a more specific error for the service layer to catch
     throw new Error(`Failed to send email. Reason: ${error.message}`);
   }
 };
