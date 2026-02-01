@@ -34,9 +34,6 @@ export const sendEmail = async (options) => {
         content: att.content, // Buffer is OK
       })),
     });
-    if (response.attachments.length > 0) {
-      console.log(`Sending email to ${options.to} with ${response.attachments.length} attachment(s).`);
-    }
 
     console.log(`Email sent to ${options.to}:`, response.id);
     return response;
