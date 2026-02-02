@@ -64,6 +64,7 @@ export const addCompany = async (req, res) => {
         company_phone,
         company_email,
         logo_url: logoUrl,
+        status: 'inactive',
       })
       .select()
       .single();
