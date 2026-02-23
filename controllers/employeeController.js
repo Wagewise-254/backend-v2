@@ -1,8 +1,12 @@
 // backend/controllers/employeeController.js
 import supabase from "../libs/supabaseClient.js";
+import { sendEmailService } from "../services/brevo.js";
+//import { sendEmailService } from "../services/email.js";
+//import { dispatchEmail } from "../services/resendService.js";
 import ExcelJS from "exceljs";
-import pkg from 'xlsx';
-import { sendEmail } from "../services/email.js";
+import pkg from "xlsx";
+import { authorize } from "../utils/authorize.js";
+//import { sendEmail } from "../services/email.js";
 const { utils, read, SSF } = pkg;
 
 // -------------------- Helper Functions -------------------- //
@@ -27,7 +31,7 @@ function parseDate(dateStr, row, fieldName, errors) {
     const regex = /^\d{4}-\d{2}-\d{2}$/; // YYYY-MM-DD
     if (!regex.test(dateStr)) {
       errors.push(
-        `Row ${row}: Invalid date format for ${fieldName}. Use YYYY-MM-DD.`
+        `Row ${row}: Invalid date format for ${fieldName}. Use YYYY-MM-DD.`,
       );
       return null;
     }
@@ -50,48 +54,43 @@ function parseNoDefaultYes(value) {
   return value.toString().trim().toLowerCase() !== "no";
 }
 
-// ---- NEW: Function to send a well-styled welcome email ----
-const sendWelcomeEmail = async (toEmail, employeeName, companyName) => {
-    try {
-        await sendEmail({
-            to: toEmail,
-            subject: `Welcome to ${companyName || 'Your Company'}! Your Wagewise Employee Account is Ready`,
-            html: `
-                <div style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; background-color: #f4f4f4; padding: 20px;">
-                    <table width="100%" border="0" cellspacing="0" cellpadding="0">
-                        <tr>
-                            <td align="center" style="padding-bottom: 20px;">
-                                <h1 style="color: #7F5EFD; font-size: 28px; margin: 0;">Wagewise</h1>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td align="center">
-                                <table width="600" border="0" cellspacing="0" cellpadding="0" style="background-color: #ffffff; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
-                                    <tr>
-                                        <td style="padding: 40px;">
-                                            <p style="font-size: 18px; margin-bottom: 20px;">Dear ${employeeName},</p>
-                                            <p style="font-size: 16px; margin-bottom: 20px;">Welcome aboard! We are excited to have you join ${companyName || 'our team'}.</p>
-                                            <p style="font-size: 16px; margin-bottom: 30px;">Your employee account has been set up on Wagewise. You will receive important communications, including your payslips, via this platform.</p>
-                                            <p style="font-size: 16px; margin-top: 20px;">Best regards,<br>The ${companyName || 'Company'} Team</p>
-                                        </td>
-                                    </tr>
-                                </table>
-                            </td>
-                        </tr>
-                        <tr>
-                            <td align="center" style="padding-top: 20px;">
-                                <p style="font-size: 12px; color: #888;">&copy; ${new Date().getFullYear()} Wagewise. All rights reserved.</p>
-                            </td>
-                        </tr>
-                    </table>
-                </div>
-            `,
-        });
-        console.log(`Welcome email sent to ${toEmail}`);
-    } catch (emailError) {
-        console.error(`Failed to send welcome email to ${toEmail}:`, emailError.message);
-    }
+export const checkCompanyAccess = async (companyId, userId, module, rule) => {
+  // 1️ Get workspace_id of the company
+  const { data: company, error: companyError } = await supabase
+    .from("companies")
+    .select("workspace_id")
+    .eq("id", companyId)
+    .single();
+
+  if (companyError || !company) return false;
+
+  // 2️ Check if user belongs to that workspace
+  const { data: workspaceUser, error: workspaceError } = await supabase
+    .from("workspace_users")
+    .select("id")
+    .eq("workspace_id", company.workspace_id)
+    .eq("user_id", userId)
+    .single();
+
+  if (workspaceError || !workspaceUser) return false;
+
+  // 3️ Check user belongs to this company
+  const { data: companyUser } = await supabase
+    .from("company_users")
+    .select("role")
+    .eq("company_id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!companyUser) return false;
+
+  const auth = await authorize(userId, company.workspace_id, module, rule);
+
+  if (!auth.allowed) return false;
+
+  return true;
 };
+// ----  Function to send email ----
 
 // -------------------- Employee Controllers -------------------- //
 
@@ -101,34 +100,35 @@ export const getEmployees = async (req, res) => {
   const userId = req.userId;
 
   try {
-    // Ensure the user owns the company
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to access employees for this company." });
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_read",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to view employees.",
+      });
     }
 
     const { data, error } = await supabase
       .from("employees")
       .select(
         `
-                *,
-                departments (
-                    name
-                ),
-                employee_bank_details (
-                    *
-                )
-            `
-      ) // Select all employee fields and department name
-      .eq("company_id", companyId);
+    *,
+    departments (id, name),
+    sub_departments (id, name),
+    job_titles (id, title),
+    employee_payment_details (*),
+    employee_contracts (*)
+  `,
+      )
+      .eq("company_id", companyId)
+      .order("created_at", {
+        foreignTable: "employee_contracts",
+        ascending: false,
+      });
 
     if (error) {
       console.error("Fetch employees error:", error);
@@ -141,35 +141,113 @@ export const getEmployees = async (req, res) => {
   }
 };
 
+// send emails
+export const sendEmployeeEmail = async (req, res) => {
+  const { companyId } = req.params;
+  const userId = req.userId;
+  const { recipients, subject, body } = req.body;
+
+  if (!recipients?.length || !subject || !body) {
+    return res.status(400).json({ error: "Missing email fields" });
+  }
+
+  try {
+    // 1 Verify company
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to send emails.",
+      });
+    }
+
+    const { data: company, error: companyError } = await supabase
+      .from("companies")
+      .select("id, business_name, workspace_id")
+      .eq("id", companyId)
+      .single();
+
+      if (companyError || !company) {
+      return res.status(403).json({ error: "Company not found" });
+    }
+
+    const htmlContent = `
+      <div style="font-family: sans-serif; color: #334155; line-height: 1.6;">
+        <h2 style="color: #0f172a;">Sent from ${company.business_name} via WageDesk</h2>
+        <div style="border-left: 4px solid #6366f1; padding-left: 16px; margin: 20px 0;">
+          ${body}
+        </div>
+        <p style="font-size: 12px; color: #94a3b8;">
+          This is an automated message .
+        </p>
+      </div>
+    `;
+    /*
+    const result = await dispatchEmail({
+      to: recipients,
+      subject,
+      html: htmlContent,
+      text: body, // Fallback text version
+    });*/
+
+    // 3️ Send emails (rate-limited for free tier)
+    for (const email of recipients) {
+      await sendEmailService({
+        to: email,
+        subject,
+        html: htmlContent,
+        text: body,
+        company: company.business_name,
+      });
+
+      // ⏱ Delay to avoid SMTP throttling (FREE TIER SAFE)
+      await new Promise((r) => setTimeout(r, 1200));
+    }
+
+    res.status(200).json({
+      success: true,
+      sent: recipients.length,
+      //messageId: result.id
+    });
+  } catch (emailError) {
+  console.error("Send email error:", emailError.message);
+  res.status(500).json({ error: "Failed to send emails" });
+}
+
+};
 // Get a single employee by ID
 export const getEmployeeById = async (req, res) => {
   const { companyId, employeeId } = req.params;
   const userId = req.userId;
 
   try {
-    // Ensure the user owns the company
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to access this employee." });
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_read",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to view employee(s).",
+      });
     }
 
     const { data, error } = await supabase
       .from("employees")
       .select(
         `
-                *,
-                departments (
-                    name
-                )
-            `
+    *,
+    departments (id, name),
+    sub_departments (id, name),
+    job_titles (id, title),
+    employee_payment_details (*),
+    employee_contracts (*)
+  `,
       )
       .eq("id", employeeId)
       .eq("company_id", companyId)
@@ -194,93 +272,39 @@ export const getEmployeeById = async (req, res) => {
 export const addEmployee = async (req, res) => {
   const { companyId } = req.params;
   const userId = req.userId;
-  const {
-    employee_number,
-    first_name,
-    last_name,
-    other_names,
-    email,
-    phone,
-    date_of_birth,
-    gender,
-    date_joined,
-    job_title,
-    department_id,
-    job_type,
-    employee_status,
-    employee_status_effective_date,
-    id_type,
-    id_number,
-    krapin,
-    shif_number,
-    nssf_number,
-    citizenship,
-    has_disability,
-    salary,
-    employee_type,
-    pays_paye,
-    pays_nssf,
-    pays_helb,
-    pays_housing_levy,
-  } = req.body;
+  const { bank_details, contract_details, ...employeeData } = req.body;
 
-  if (!employee_number || !first_name || !last_name || !salary) {
+  if (
+    !employeeData.employee_number ||
+    !employeeData.first_name ||
+    !employeeData.last_name ||
+    !employeeData.salary
+  ) {
     return res.status(400).json({ error: "Required fields are missing." });
   }
 
   try {
-    // Ensure the user owns the company
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to add employee to this company." });
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to Add employee(s).",
+      });
     }
 
-    const { data: newEmployee, error } = await supabase
+    const { data: newEmployee, error: empError } = await supabase
       .from("employees")
-      .insert({
-        company_id: companyId,
-        department_id,
-        employee_number,
-        first_name,
-        last_name,
-        other_names,
-        email,
-        phone,
-        date_of_birth,
-        gender,
-        date_joined,
-        job_title,
-        job_type,
-        employee_status,
-        employee_status_effective_date,
-        id_type,
-        id_number,
-        krapin,
-        shif_number,
-        nssf_number,
-        citizenship,
-        has_disability,
-        salary,
-        employee_type,
-        pays_paye,
-        pays_nssf,
-        pays_helb,
-        pays_housing_levy,
-      })
+      .insert({ ...employeeData, company_id: companyId })
       .select()
       .single();
 
-    if (error) {
-      console.error("Insert employee error:", error);
-      if (error.code === "23505") {
+    if (empError) {
+      console.error("Insert employee error:", empError);
+      if (empError.code === "23505") {
         // Unique violation error (e.g., employee_number, KRA PIN, ID number, email)
         return res.status(409).json({
           error:
@@ -290,26 +314,23 @@ export const addEmployee = async (req, res) => {
       throw new Error("Failed to add employee.");
     }
 
-    // Insert into employee_bank_details after successfully creating the employee
-    const { data: bankData, error: bankError } = await supabase
-      .from("employee_bank_details")
-      .insert([
-        {
-          employee_id: newEmployee.id, // Use the ID of the newly created employee
-          payment_method: "Cash",
-        },
-      ])
-      .select()
-      .single();
-
-    if (bankError) {
-      console.error("Insert bank details error:", bankError);
-      return res
-        .status(500)
-        .json({ error: "Failed to add employee bank details" });
+    // 3. Insert Payment Details
+    if (bank_details) {
+      await supabase.from("employee_payment_details").insert({
+        ...bank_details,
+        employee_id: newEmployee.id,
+      });
     }
 
-    res.status(201).json({ employee: newEmployee, bankDetails: bankData });
+    // 4. Insert Contract Details
+    if (contract_details) {
+      await supabase.from("employee_contracts").insert({
+        ...contract_details,
+        employee_id: newEmployee.id,
+      });
+    }
+
+    res.status(201).json(newEmployee);
   } catch (error) {
     console.error("Add employee controller error:", error);
     res.status(500).json({ error: error.message });
@@ -320,43 +341,24 @@ export const addEmployee = async (req, res) => {
 export const updateEmployee = async (req, res) => {
   const { companyId, employeeId } = req.params;
   const userId = req.userId;
-  const {
-    department_id,
-    employee_number,
-    first_name,
-    last_name,
-    other_names,
-    email,
-    phone,
-    date_of_birth,
-    gender,
-    date_joined,
-    job_title,
-    job_type,
-    employee_status,
-    employee_status_effective_date,
-    id_type,
-    id_number,
-    krapin,
-    shif_number,
-    nssf_number,
-    citizenship,
-    has_disability,
-    salary,
-    employee_type,
-    pays_paye,
-    pays_nssf,
-    pays_helb,
-    pays_housing_levy,
-  } = req.body;
+  const { bank_details, contract_details, ...employeeData } = req.body;
 
-  const validatedDepartmentId = department_id === "" ? null : department_id;
-
-  if (!employee_number || !first_name || !last_name || !salary) {
-    return res.status(400).json({ error: "Required fields are missing." });
-  }
+  const validatedDepartmentId =
+    employeeData.department_id === "" ? null : employeeData.department_id;
 
   try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to Edit employee(s).",
+      });
+    }
+
     // Ensure the user owns the company and the employee belongs to that company
     const { data: employee, error: employeeCheckError } = await supabase
       .from("employees")
@@ -371,51 +373,11 @@ export const updateEmployee = async (req, res) => {
         .json({ error: "Unauthorized or employee not found." });
     }
 
-    // Verify user ownership of the company
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to update employee for this company." });
-    }
-
     const { data, error } = await supabase
       .from("employees")
       .update({
         department_id: validatedDepartmentId,
-        employee_number,
-        first_name,
-        last_name,
-        other_names,
-        email,
-        phone,
-        date_of_birth,
-        gender,
-        date_joined,
-        job_title,
-        job_type,
-        employee_status,
-        employee_status_effective_date,
-        id_type,
-        id_number,
-        krapin,
-        shif_number,
-        nssf_number,
-        citizenship,
-        has_disability,
-        salary,
-        employee_type,
-        pays_paye,
-        pays_nssf,
-        pays_helb,
-        pays_housing_levy,
-        updated_at: new Date().toISOString(),
+        ...employeeData,
       })
       .eq("id", employeeId)
       .eq("company_id", companyId) // Ensure only employee for this company is updated
@@ -438,128 +400,152 @@ export const updateEmployee = async (req, res) => {
   }
 };
 
-// Update employee status (specific update)
-export const updateEmployeeStatus = async (req, res) => {
-  const { companyId, employeeId } = req.params;
-  const { employee_status, employee_status_effective_date } = req.body;
-  const userId = req.userId;
+// backend/controllers/employeeController.js
 
-  if (!employee_status || !employee_status_effective_date) {
-    return res
-      .status(400)
-      .json({ error: "Employee status and effective date are required." });
-  }
+export const updateSectionEmployee = async (req, res) => {
+  const { companyId, employeeId } = req.params;
+  const userId = req.userId;
+  const updateData = req.body;
 
   try {
-    // Ownership checks similar to updateEmployee
-    const { data: employee, error: employeeCheckError } = await supabase
-      .from("employees")
-      .select("id, company_id")
-      .eq("id", employeeId)
-      .eq("company_id", companyId)
-      .single();
+    const isAuthorized = await checkCompanyAccess(companyId, userId, "EMPLOYEES", "can_write");
+    if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
 
-    if (employeeCheckError || !employee) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized or employee not found." });
-    }
-
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res.status(403).json({
-        error: "Unauthorized to update employee status for this company.",
-      });
-    }
-
-    const { data, error } = await supabase
+    // 1. Update main Employee table
+    const { error: empError } = await supabase
       .from("employees")
       .update({
-        employee_status,
-        employee_status_effective_date,
-        updated_at: new Date().toISOString(),
+        employee_number: updateData.employee_number,
+        first_name: updateData.first_name,
+        middle_name: updateData.middle_name,
+        last_name: updateData.last_name,
+        email: updateData.email,
+        phone: updateData.phone,
+        date_of_birth: updateData.date_of_birth,
+        gender: updateData.gender,
+        marital_status: updateData.marital_status,
+        id_number: updateData.id_number,
+        salary: updateData.salary,
+        // ... add other fields as needed
       })
-      .eq("id", employeeId)
-      .eq("company_id", companyId)
-      .select()
-      .single();
+      .eq("id", employeeId);
 
-    if (error) {
-      console.error("Update employee status error:", error);
-      throw new Error("Failed to update employee status.");
+    if (empError) throw empError;
+
+    // 2. Update Payment Details
+    if (updateData.bank_details) {
+      const { error: payError } = await supabase
+        .from("employee_payment_details")
+        .upsert({
+          employee_id: employeeId,
+          ...updateData.bank_details,
+          updated_at: new Date()
+        }, { onConflict: 'employee_id' });
+      
+      if (payError) throw payError;
     }
 
-    res.status(200).json(data);
+    // 3. Update Active Contract
+    if (updateData.contract_details) {
+      const { error: conError } = await supabase
+        .from("employee_contracts")
+        .update(updateData.contract_details)
+        .eq("employee_id", employeeId)
+        .eq("contract_status", "ACTIVE");
+      
+      if (conError) throw conError;
+    }
+
+    res.status(200).json({ message: "Employee updated successfully" });
   } catch (error) {
+    console.error("Update error:", error);
     res.status(500).json({ error: error.message });
   }
 };
 
-// Update employee salary (specific update)
-export const updateEmployeeSalary = async (req, res) => {
-  const { companyId, employeeId } = req.params;
-  const { salary } = req.body;
+// Update payment details
+export const updatePaymentDetails = async (req, res) => {
+  const { companyId, employeeId, paymentDetailsId } = req.params;
   const userId = req.userId;
-
-  if (salary === undefined || salary === null || isNaN(Number(salary))) {
-    return res.status(400).json({ error: "Valid salary is required." });
-  }
+  const paymentData = req.body;
 
   try {
-    // Ownership checks similar to updateEmployee
-    const { data: employee, error: employeeCheckError } = await supabase
-      .from("employees")
-      .select("id, company_id")
-      .eq("id", employeeId)
-      .eq("company_id", companyId)
-      .single();
-
-    if (employeeCheckError || !employee) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized or employee not found." });
-    }
-
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res.status(403).json({
-        error: "Unauthorized to update employee salary for this company.",
-      });
-    }
+    const isAuthorized = await checkCompanyAccess(companyId, userId, "EMPLOYEES", "can_write");
+    if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
 
     const { data, error } = await supabase
-      .from("employees")
-      .update({
-        salary: parseFloat(salary), // Ensure salary is a number
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", employeeId)
-      .eq("company_id", companyId)
+      .from("employee_payment_details")
+      .update({ ...paymentData, updated_at: new Date() })
+      .eq("id", paymentDetailsId)
+      .eq("employee_id", employeeId)
       .select()
       .single();
 
-    if (error) {
-      console.error("Update employee salary error:", error);
-      throw new Error("Failed to update employee salary.");
-    }
-
+    if (error) throw error;
     res.status(200).json(data);
   } catch (error) {
+    console.error("Update payment details error:", error);
     res.status(500).json({ error: error.message });
   }
 };
+
+// Create payment details
+export const createPaymentDetails = async (req, res) => {
+  const { companyId, employeeId } = req.params;
+  const userId = req.userId;
+  const paymentData = req.body;
+
+  try {
+    const isAuthorized = await checkCompanyAccess(companyId, userId, "EMPLOYEES", "can_write");
+    if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
+
+    const { data, error } = await supabase
+      .from("employee_payment_details")
+      .insert({ ...paymentData, employee_id: employeeId })
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.status(201).json(data);
+  } catch (error) {
+    console.error("Create payment details error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Update contract
+export const updateContract = async (req, res) => {
+  const { employeeId, contractId } = req.params;
+  const userId = req.userId;
+  const contractData = req.body;
+
+  try {
+    // You'll need to get companyId from employee
+    const { data: employee } = await supabase
+      .from("employees")
+      .select("company_id")
+      .eq("id", employeeId)
+      .single();
+
+    const isAuthorized = await checkCompanyAccess(employee.company_id, userId, "EMPLOYEES", "can_write");
+    if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
+
+    const { data, error } = await supabase
+      .from("employee_contracts")
+      .update(contractData)
+      .eq("id", contractId)
+      .eq("employee_id", employeeId)
+      .select()
+      .single();
+
+    if (error) throw error;
+    res.status(200).json(data);
+  } catch (error) {
+    console.error("Update contract error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
 
 // Delete an employee
 export const deleteEmployee = async (req, res) => {
@@ -567,6 +553,18 @@ export const deleteEmployee = async (req, res) => {
   const userId = req.userId;
 
   try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_delete",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to delete employee(s).",
+      });
+    }
+
     // Ownership checks similar to updateEmployee
     const { data: employee, error: employeeCheckError } = await supabase
       .from("employees")
@@ -579,19 +577,6 @@ export const deleteEmployee = async (req, res) => {
       return res
         .status(403)
         .json({ error: "Unauthorized or employee not found." });
-    }
-
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to delete employee from this company." });
     }
 
     const { error } = await supabase
@@ -620,35 +605,58 @@ export const importEmployees = async (req, res) => {
   }
 
   try {
-    // Ensure user owns company
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to import employees to this company." });
+   const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to bulk import.",
+      });
     }
 
-    // Get all departments for validation
-    const { data: departments, error: deptError } = await supabase
-      .from("departments")
-      .select("id, name")
-      .eq("company_id", companyId);
+    // Get all departments, subs and titles for validation
+    const [deptsRes, subDeptsRes, titlesRes] = await Promise.all([
+      supabase
+        .from("departments")
+        .select("id, name")
+        .eq("company_id", companyId),
+      supabase
+        .from("sub_departments")
+        .select("id, name")
+        .eq("company_id", companyId),
+      supabase
+        .from("job_titles")
+        .select("id, title")
+        .eq("company_id", companyId),
+    ]);
 
-    if (deptError) {
-      console.error("Fetch departments error:", deptError);
-      return res
-        .status(500)
-        .json({ error: "Failed to fetch departments for validation." });
+    if (deptsRes.error || subDeptsRes.error || titlesRes.error) {
+      console.error(
+        "Fetch depts, sub-depts and titles error:",
+        deptsRes.error || subDeptsRes.error || titlesRes.error,
+      );
+      throw new Error("Fetch depts, sub-depts and titles error ");
     }
+
+    const departments = deptsRes.data ?? [];
+    const subDepartments = subDeptsRes.data ?? [];
+    const jobTitles = titlesRes.data ?? [];
 
     const departmentMap = departments.reduce((acc, d) => {
       acc[d.name.toLowerCase()] = d.id;
+      return acc;
+    }, {});
+
+    const subDepartmentMap = subDepartments.reduce((acc, s) => {
+      acc[s.name.toLowerCase()] = s.id;
+      return acc;
+    }, {});
+
+    const jobTitleMap = jobTitles.reduce((acc, j) => {
+      acc[j.title.toLowerCase()] = j.id;
       return acc;
     }, {});
 
@@ -691,7 +699,7 @@ export const importEmployees = async (req, res) => {
         errors.push(
           `Row ${
             i + 1
-          }: Missing required fields (Employee Number, First Name, Last Name, Salary).`
+          }: Missing required fields (Employee Number, First Name, Last Name, Salary).`,
         );
         continue;
       }
@@ -725,7 +733,31 @@ export const importEmployees = async (req, res) => {
         departmentId = departmentMap[deptKey];
         if (!departmentId) {
           errors.push(
-            `Row ${i + 1}: Department '${employeeData.department}' not found.`
+            `Row ${i + 1}: Department '${employeeData.department}' not found.`,
+          );
+        }
+      }
+
+      // Map sub department
+      let subDepartmentId = null;
+      if (employeeData.sub_department) {
+        const subDeptKey = employeeData.sub_department.toLowerCase();
+        subDepartmentId = subDepartmentMap[subDeptKey];
+        if (!subDepartmentId) {
+          errors.push(
+            `Row ${i + 1}:  Sub Department '${employeeData.sub_department}' not found.`,
+          );
+        }
+      }
+
+      // Map job titles
+      let jobTitleId = null;
+      if (employeeData.job_title) {
+        const titletKey = employeeData.job_title.toLowerCase();
+        jobTitleId = jobTitleMap[titletKey];
+        if (!jobTitleId) {
+          errors.push(
+            `Row ${i + 1}: Job Title '${employeeData.job_title}' not found.`,
           );
         }
       }
@@ -733,23 +765,65 @@ export const importEmployees = async (req, res) => {
       // Build employee record
       const record = {
         company_id: companyId,
-        department_id: employeeData.department ? departmentMap[employeeData.department.toLowerCase()] || null : null,
+        department_id: employeeData.department
+          ? departmentMap[employeeData.department.toLowerCase()] || null
+          : null,
+        sub_department_id: employeeData.sub_department
+          ? subDepartmentMap[employeeData.sub_department.toLowerCase()] || null
+          : null,
+        job_title_id: employeeData.job_title
+          ? jobTitleMap[employeeData.job_title.toLowerCase()] || null
+          : null,
         employee_number: employeeData.employee_number.toString(),
         first_name: employeeData.first_name,
+        middle_name: employeeData.middle_name || null,
         last_name: employeeData.last_name,
-        other_names: employeeData.other_names || null,
         email: employeeData.email || null,
         phone: employeeData.phone || null,
-        date_of_birth: employeeData['date_of_birth_(yyyy-mm-dd)'] ? parseDate(employeeData['date_of_birth_(yyyy-mm-dd)'], i + 1, "Date of Birth", errors) : null,
+        date_of_birth: employeeData["date_of_birth_(yyyy-mm-dd)"]
+          ? parseDate(
+              employeeData["date_of_birth_(yyyy-mm-dd)"],
+              i + 1,
+              "Date of Birth",
+              errors,
+            )
+          : null,
         gender: ["male", "female", "other"].includes(
-          employeeData.gender?.toLowerCase()
+          employeeData.gender?.toLowerCase(),
         )
           ? employeeData.gender
           : null,
-        date_joined: employeeData['date_joined_(yyyy-mm-dd)'] ? parseDate(employeeData['date_joined_(yyyy-mm-dd)'], i + 1, "Date Joined", errors) : new Date().toISOString().split("T")[0],
-        job_title: employeeData.job_title || null,
+        blood_group: [
+          "A+",
+          "A-",
+          "B+",
+          "B-",
+          "O+",
+          "O-",
+          "AB+",
+          "AB-",
+        ].includes(employeeData.blood_group?.toLowerCase())
+          ? employeeData.blood_group
+          : null,
+        marital_status: [
+          "Single (never married)",
+          "Married",
+          "Divorced",
+          "Widowed",
+          "Separated",
+        ].includes(employeeData.marital_status?.toLowerCase())
+          ? employeeData.marital_status
+          : null,
+        hire_date: employeeData["hire_date_(yyyy-mm-dd)"]
+          ? parseDate(
+              employeeData["hire_date_(yyyy-mm-dd)"],
+              i + 1,
+              "Hire Date",
+              errors,
+            )
+          : new Date().toISOString().split("T")[0],
         job_type: ["full-time", "part-time", "contract", "internship"].includes(
-          employeeData.job_type?.toLowerCase()
+          employeeData.job_type?.toLowerCase(),
         )
           ? employeeData.job_type
           : null,
@@ -761,35 +835,95 @@ export const importEmployees = async (req, res) => {
         ].includes(employeeData.employee_status?.toLowerCase())
           ? employeeData.employee_status
           : "Active",
-        employee_status_effective_date: employeeData['employee_status_effective_date_(yyyy-mm-dd)'] ? parseDate(employeeData['employee_status_effective_date_(yyyy-mm-dd)'], i + 1, "Employee Status Effective Date", errors) : new Date().toISOString().split("T")[0],
+        employee_status_effective_date: employeeData[
+          "employee_status_effective_date_(yyyy-mm-dd)"
+        ]
+          ? parseDate(
+              employeeData["employee_status_effective_date_(yyyy-mm-dd)"],
+              i + 1,
+              "Employee Status Effective Date",
+              errors,
+            )
+          : new Date().toISOString().split("T")[0],
         id_type: ["national id", "passport"].includes(
-          employeeData.id_type?.toLowerCase()
+          employeeData.id_type?.toLowerCase(),
         )
           ? employeeData.id_type
           : null,
         id_number: employeeData.id_number?.toString() || null,
-        krapin: employeeData.kra_pin ? String(employeeData.kra_pin).trim() : null,
+        krapin: employeeData.kra_pin
+          ? String(employeeData.kra_pin).trim()
+          : null,
         shif_number: employeeData.shif_number?.toString() || null,
         nssf_number: employeeData.nssf_number?.toString() || null,
         citizenship: ["kenyan", "non-kenyan"].includes(
-          employeeData.citizenship?.toLowerCase()
+          employeeData.citizenship?.toLowerCase(),
         )
-          ? employeeData.citizenship
+          ? employeeData.citizenship || "Kenyan"
           : null,
         has_disability: parseYesNo(employeeData.has_disability),
-        salary: parseFloat(employeeData.salary) || 0,
-        employee_type: ["primary employee", "secondary employee"].includes(
-          employeeData.employee_type?.toLowerCase()
-        )
-          ? employeeData.employee_type
+        employee_type: [
+          "primary employee",
+          "secondary employee",
+          "consultant",
+        ].includes(employeeData.employee_type?.toLowerCase())
+          ? employeeData.employee_type || "Primary Employee"
           : null,
         pays_paye: parseNoDefaultYes(employeeData.pays_paye),
         pays_nssf: parseNoDefaultYes(employeeData.pays_nssf),
         pays_helb: parseYesNo(employeeData.pays_helb),
         pays_housing_levy: parseNoDefaultYes(employeeData.pays_housing_levy),
+        pays_shif: parseNoDefaultYes(employeeData.pays_shif),
+        salary: parseFloat(employeeData.salary) || 0,
       };
 
-      employeesToInsert.push(record);
+      // 2. Prepare Payment Details for this row
+      const paymentDetail = {
+        payment_method: (employeeData.payment_method || "CASH").toUpperCase(),
+        bank_name: employeeData.bank_name || null,
+        bank_code: employeeData.bank_code?.toString() || null,
+        branch_name: employeeData.branch_name || null,
+        branch_code: employeeData.branch_code?.toString() || null,
+        account_number: employeeData.account_number?.toString() || null,
+        account_name: employeeData.account_name || null,
+        mobile_type: employeeData.mobile_type || null,
+        phone_number: employeeData.phone_number?.toString() || null,
+      };
+
+      // 3. Prepare Contract Details for this row
+      const contractDetail = {
+        contract_type:
+          employeeData.contract_type || "Permanent and Pensionable",
+        start_date: employeeData["start_date_(yyyy-mm-dd)"]
+          ? parseDate(
+              employeeData["start_date_(yyyy-mm-dd)"],
+              i + 1,
+              "Start Date",
+              errors,
+            )
+          : record.date_joined,
+        end_date: employeeData["end_date_(yyyy-mm-dd)"]
+          ? parseDate(
+              employeeData["end_date_(yyyy-mm-dd)"],
+              i + 1,
+              "End Date",
+              errors,
+            )
+          : null,
+        probation_end_date: employeeData["probation_end_date_(yyyy-mm-dd)"]
+          ? parseDate(
+              employeeData["probation_end_date_(yyyy-mm-dd)"],
+              i + 1,
+              "Probation End Date",
+              errors,
+            )
+          : null,
+        contract_status: (
+          employeeData.contract_status || "ACTIVE"
+        ).toUpperCase(),
+      };
+
+      employeesToInsert.push({ record, paymentDetail, contractDetail });
     }
 
     if (errors.length > 0) {
@@ -798,63 +932,124 @@ export const importEmployees = async (req, res) => {
         .json({ error: "Validation failed.", details: errors });
     }
 
-    // Insert employees
-    const { data, error } = await supabase
+    // 1. Upsert Main Employee Recordss
+    const coreRecords = employeesToInsert.map((e) => e.record);
+    const { data: insertedEmployees, error: empError } = await supabase
       .from("employees")
-      .upsert(employeesToInsert, {
+      .upsert(coreRecords, {
         onConflict: "company_id, employee_number",
-        ignoreDuplicates: false, // Ensures all data is considered for upsert
+        ignoreDuplicates: false,
       })
-      .select();
+      .select("id, employee_number");
 
-    if (error) {
-      console.error("Bulk upsert employee error:", error);
+    if (empError) {
+      console.error("Bulk upsert employee error:", empError);
       // Handle unique constraint errors if they still occur from existing DB data
-      if (error.code === '23505') {
-        const uniqueKey = error.details.match(/\((.*?)\)=\(.*?\)/)[1];
-        return res.status(409).json({ error: `A record with a duplicate unique key already exists in the database: ${uniqueKey}.` });
+      if (empError.code === "23505") {
+        const uniqueKey = empError.details.match(/\((.*?)\)=\(.*?\)/)[1];
+        return res.status(409).json({
+          error: `A record with a duplicate unique key already exists in the database: ${uniqueKey}.`,
+        });
       }
-      return res.status(500).json({ error: "Failed to import employees.", details: error.message });
+      return res.status(500).json({
+        error: "Failed to import employees.",
+        details: empError.message,
+      });
     }
 
-    // After successful upsert, send a welcome email to each new employee
-    // You can get the company name from the companyId or a request body
-    const { data: companyData } = await supabase.from('companies').select('business_name').eq('id', companyId).single();
-    const companyName = companyData ? companyData.business_name : 'Your Company';
+    // Map the returned UUIDs back to our original data using employee_number as the key
+    const paymentRecords = [];
+    const contractRecords = [];
 
-    // Loop through the upserted employees and send the email
-    for (const employee of data) {
-      if (employee.email) {
-        // You'll need to check if the employee was newly inserted or updated.
-        // For simplicity, we send a welcome email to all. A more advanced
-        // implementation would only send it on new insertions.
-        await sendWelcomeEmail(employee.email, `${employee.first_name} ${employee.last_name}`, companyName);
+    insertedEmployees.forEach((emp) => {
+      const originalData = employeesToInsert.find(
+        (e) => e.record.employee_number === emp.employee_number,
+      );
+
+      if (originalData) {
+        paymentRecords.push({
+          ...originalData.paymentDetail,
+          employee_id: emp.id,
+        });
+        contractRecords.push({
+          ...originalData.contractDetail,
+          employee_id: emp.id,
+        });
       }
-    }
+    });
 
-    // Add default bank details
-    const employeeBankDetails = data.map((emp) => ({
-      employee_id: emp.id,
-      payment_method: "Cash",
-    }));
-
+    // 2. Upsert Payment Details
     const { error: bankError } = await supabase
-      .from("employee_bank_details")
-      .upsert(employeeBankDetails, { onConflict: "employee_id" });
+      .from("employee_payment_details")
+      .upsert(paymentRecords, { onConflict: "employee_id" });
+
+    // 3. Upsert Contract Details
+    for (const contract of contractRecords) {
+      // Check if we're trying to insert an ACTIVE contract
+      if (contract.contract_status === "ACTIVE") {
+        // First, check if there's already an active contract
+        const { data: existingActive } = await supabase
+          .from("employee_contracts")
+          .select("id")
+          .eq("employee_id", contract.employee_id)
+          .eq("contract_status", "ACTIVE")
+          .maybeSingle();
+
+        if (existingActive) {
+          // Update existing active contract to EXPIRED
+          await supabase
+            .from("employee_contracts")
+            .update({
+              contract_status: "EXPIRED",
+              end_date: contract.start_date, // or new Date()
+            })
+            .eq("id", existingActive.id);
+        }
+
+        // Now insert the new active contract
+        const { error: contractError } = await supabase
+          .from("employee_contracts")
+          .insert(contract);
+
+        if (contractError) {
+          console.error(
+            `Contract error for employee ${contract.employee_id}:`,
+            contractError,
+          );
+          errors.push(
+            `Failed to insert contract for employee ${contract.employee_id}`,
+          );
+        }
+      } else {
+        // For non-active contracts, just insert (no constraint issue)
+        const { error: contractError } = await supabase
+          .from("employee_contracts")
+          .insert(contract);
+
+        if (contractError) {
+          console.error(
+            `Contract error for employee ${contract.employee_id}:`,
+            contractError,
+          );
+          errors.push(
+            `Failed to insert contract for employee ${contract.employee_id}`,
+          );
+        }
+      }
+    }
 
     if (bankError) {
-      console.error("Bank insert error:", bankError);
-      return res
-        .status(500)
-        .json({ error: "Employees added, but failed to insert/update bank details.", details: bankError.message });
+      console.error("Sub-table insert error:", bankError);
+      return res.status(500).json({
+        error: "Bank details update failed",
+        details: bankError.message,
+      });
     }
 
-    res
-      .status(201)
-      .json({
-        message: `${data.length} employees imported successfully.`,
-        importedEmployees: data,
-      });
+    res.status(201).json({
+      message: `${insertedEmployees.length} employees imported successfully.`,
+      importedEmployees: insertedEmployees,
+    });
   } catch (err) {
     console.error("Import employees controller error:", err);
     res.status(500).json({ error: err.message });
@@ -866,43 +1061,50 @@ export const generateEmployeeTemplate = async (req, res) => {
   const userId = req.userId;
 
   try {
-    // 1. Ensure the user owns the company
-    const { data: company, error: companyError } = await supabase
-      .from("companies")
-      .select("id")
-      .eq("id", companyId)
-      .eq("user_id", userId)
-      .single();
-
-    if (companyError || !company) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to access this company." });
+   const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_read",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to download template.",
+      });
     }
 
-    // 2. Fetch departments from Supabase
-    const { data: departments, error: deptError } = await supabase
-      .from("departments")
-      .select("name")
-      .eq("company_id", companyId)
-      .order("name");
+    // 2. Fetch departments, sub departments and job titles from Supabase
+    const [deptsRes, subDeptsRes, titlesRes] = await Promise.all([
+      supabase.from("departments").select("name").eq("company_id", companyId),
+      supabase
+        .from("sub_departments")
+        .select("name")
+        .eq("company_id", companyId),
+      supabase.from("job_titles").select("title").eq("company_id", companyId),
+    ]);
 
-    if (deptError) {
-      console.error("Departments fetch error:", deptError);
-      throw new Error("Failed to fetch departments.");
+    if (deptsRes.error || subDeptsRes.error || titlesRes.error) {
+      throw new Error("Failed to load dropdown metadata");
     }
 
+    const departments = deptsRes.data ?? [];
+    const subDepartments = subDeptsRes.data ?? [];
+    const jobTitles = titlesRes.data ?? [];
     // --- HEADERS ---
     const templateHeaders = [
       "Employee Number",
       "First Name",
+      "Middle Name",
       "Last Name",
-      "Other Names",
       "Email",
       "Phone",
       "Date of Birth (YYYY-MM-DD)",
       "Gender",
-      "Date Joined (YYYY-MM-DD)",
+      "Blood Group",
+      "Marital Status",
+      "Hire Date (YYYY-MM-DD)",
+      "Department",
+      "Sub Department",
       "Job Title",
       "Job Type",
       "Employee Status",
@@ -920,23 +1122,59 @@ export const generateEmployeeTemplate = async (req, res) => {
       "Pays NSSF",
       "Pays HELB",
       "Pays Housing Levy",
-      "Department",
+      "Pays SHIF",
+      "Contract Type",
+      "Start Date (YYYY-MM-DD)",
+      "End Date (YYYY-MM-DD) ",
+      "Probation End Date (YYYY-MM-DD)",
+      "Contract Status",
+      "Payment Method",
+      "Bank Name",
+      "Bank Code",
+      "Branch Name",
+      "Branch Code",
+      "Account Number",
+      "Account Name",
+      "Mobile Type",
+      "Phone Number",
     ];
 
     // --- DROPDOWNS ---
     const dropdownOptions = {
       Gender: ["Male", "Female", "Other"],
-      Citizenship: ["Kenyan", "Non-Kenyan"],
+      "Blood Group": ["A+", "A-", "B+", "B-", "O+", "O-", "AB+", "AB-"],
+      "Marital Status": [
+        "Single (never married)",
+        "Married",
+        "Divorced",
+        "Widowed",
+        "Separated",
+      ],
+      Department: departments.map((d) => d.name),
+      "Sub Department": subDepartments.map((d) => d.name),
+      "Job Title": jobTitles.map((t) => t.title),
       "Job Type": ["Full-time", "Part-time", "Contract", "Internship"],
-      "Employee Type": ["Primary Employee", "Secondary Employee"],
+      "Employee Status": ["ACTIVE", "On Leave", "Terminated", "Suspended"],
       "ID Type": ["National ID", "Passport"],
-      "Employee Status": ["Active", "On Leave", "Terminated", "Suspended"],
+      Citizenship: ["Kenyan", "Non-Kenyan"],
       "Has Disability": ["Yes", "No"],
+      "Employee Type": ["Primary Employee", "Secondary Employee", "Consultant"],
       "Pays PAYE": ["Yes", "No"],
       "Pays NSSF": ["Yes", "No"],
       "Pays HELB": ["Yes", "No"],
       "Pays Housing Levy": ["Yes", "No"],
-      Department: departments?.map((d) => d.name) || [],
+      "Pays SHIF": ["Yes", "No"],
+      "Contract Type": [
+        "Permanent and Pensionable",
+        "Fixed-Term Contract",
+        "Casual Employment",
+        "Probationary Contracts",
+        "Contract for Services",
+        "Apprenticeship/Indentured Learnership",
+      ],
+      "Contract Status": ["ACTIVE", "EXPIRED", "TERMINATED"],
+      "Payment Method": ["BANK", "MOBILE", "CASH"],
+      "Mobile Type": ["M-Pesa", "Airtel Money", "T-Kash"],
     };
 
     // 3. Create workbook & worksheet
@@ -966,8 +1204,11 @@ export const generateEmployeeTemplate = async (req, res) => {
 
       if (
         header.startsWith("Date of Birth") ||
-        header.startsWith("Date Joined") ||
-        header.startsWith("Employee Status Effective Date")
+        header.startsWith("Hire Date") ||
+        header.startsWith("Employee Status Effective Date") ||
+        header.startsWith("Start Date") ||
+        header.startsWith("End Date") ||
+        header.startsWith("Probation End Date")
       ) {
         column.numFmt = "yyyy-mm-dd";
       }
@@ -984,7 +1225,7 @@ export const generateEmployeeTemplate = async (req, res) => {
             type: "list",
             allowBlank: true,
             formulae: [`"${dropdownOptions[header].join(",")}"`],
-          }
+          },
         );
       }
     });
@@ -992,11 +1233,11 @@ export const generateEmployeeTemplate = async (req, res) => {
     // 8. Stream workbook to response
     res.setHeader(
       "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader(
       "Content-Disposition",
-      "attachment; filename=Employee_Import_Template.xlsx"
+      "attachment; filename=Employee_Import_Template.xlsx",
     );
 
     await workbook.xlsx.write(res);

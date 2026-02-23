@@ -1,7 +1,7 @@
 // backend/routes/p9aRoutes.js
 import express from 'express';
 import { generateP9APdf, emailP9A } from '../controllers/p9aController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
 
 const router = express.Router({ mergeParams: true });
 

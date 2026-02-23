@@ -1,24 +1,50 @@
 // backend/routes/payrollRoutes.js
-
 import express from "express";
 import { 
-    calculatePayroll, 
-    completePayrollRun, 
+    syncPayroll,
     getPayrollRuns,
+    getPayrollRun,
     getPayrollDetails,
+    updatePayrollStatus,
+    completePayrollRun,
     cancelPayrollRun,
-    getP9PayrollYears
+    lockPayrollRun,
+    unlockPayrollRun,
+    markAsPaid,
+    getPayrollYears,
+    getPayrollSummary,
+    deletePayrollRun,
+    getPayrollReviewStatus,
+    updateItemReviewStatus
 } from '../controllers/payrollController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
+import { checkPayrollAccess } from '../middleware/payrollAccess.js';
 
 const router = express.Router({ mergeParams: true });
 
-// All routes are protected by the verifyToken middleware
-router.post('/payroll/run', verifyToken, calculatePayroll);
-router.post('/payroll/complete/:payrollRunId', verifyToken, completePayrollRun);
-router.post('/payroll/cancel/:payrollRunId', verifyToken, cancelPayrollRun); // New cancel route
-router.get('/payroll/runs', verifyToken, getPayrollRuns);
-router.get('/payroll/runs/:runId', verifyToken, getPayrollDetails);
-router.get('/payroll/p9a/years', verifyToken, getP9PayrollYears);
+// Apply verification middleware to all routes
+router.use(verifyToken);
+
+// Main payroll operations
+router.get('/payroll/runs/:runId/review-summary', getPayrollReviewStatus);
+router.post('/payroll/sync', syncPayroll);
+router.get('/payroll/runs', getPayrollRuns);
+router.get('/payroll/runs/:runId', getPayrollRun);
+router.get('/payroll/runs/:runId/details', getPayrollDetails);
+router.get('/payroll/summary', getPayrollSummary);
+router.get('/payroll/years', getPayrollYears);
+
+router.patch('/payroll/reviews/:reviewId', updateItemReviewStatus);
+
+// Status management with access control
+router.patch('/payroll/:runId/status', checkPayrollAccess, updatePayrollStatus);
+router.post('/payroll/:runId/complete', checkPayrollAccess, completePayrollRun);
+router.post('/payroll/:runId/cancel', checkPayrollAccess, cancelPayrollRun);
+router.post('/payroll/:runId/lock', checkPayrollAccess, lockPayrollRun);
+router.post('/payroll/:runId/unlock', checkPayrollAccess, unlockPayrollRun);
+router.post('/payroll/:runId/paid', checkPayrollAccess, markAsPaid);
+
+// Dangerous operations (require additional checks)
+router.delete('/payroll/:runId', checkPayrollAccess, deletePayrollRun);
 
 export default router;

@@ -2,7 +2,7 @@
 
 import express from 'express';
 import { generatePayslipPdf, emailPayslip } from '../controllers/payslipController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
 
 const router = express.Router({ mergeParams: true });
 

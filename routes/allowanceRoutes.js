@@ -9,7 +9,7 @@ import {
   importAllowances,
   bulkDeleteAllowances
 } from '../controllers/allowanceController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
 import multer from 'multer';
 
 const router = express.Router();

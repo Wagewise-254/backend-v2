@@ -1,17 +1,40 @@
-import supabase from '../libs/supabaseClient.js';
+import supabase from "../libs/supabaseClient.js";
+import { authorize } from "../utils/authorize.js";
 
-// Helper function to check for company ownership
-export const checkCompanyOwnership = async (companyId, userId) => {
-  const { data: company, error } = await supabase
-    .from('companies')
-    .select('id')
-    .eq('id', companyId)
-    .eq('user_id', userId)
+export const checkCompanyAccess = async (companyId, userId, module, rule) => {
+  // 1️ Get workspace_id of the company
+  const { data: company, error: companyError } = await supabase
+    .from("companies")
+    .select("workspace_id")
+    .eq("id", companyId)
     .single();
 
-  if (error || !company) {
-    return false;
-  }
+  if (companyError || !company) return false;
+
+  // 2️ Check if user belongs to that workspace
+  const { data: workspaceUser, error: workspaceError } = await supabase
+    .from("workspace_users")
+    .select("id")
+    .eq("workspace_id", company.workspace_id)
+    .eq("user_id", userId)
+    .single();
+
+  if (workspaceError || !workspaceUser) return false;
+
+  // 3️ Check user belongs to this company
+  const { data: companyUser } = await supabase
+    .from("company_users")
+    .select("role")
+    .eq("company_id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!companyUser) return false;
+
+  const auth = await authorize(userId, company.workspace_id, module, rule);
+
+  if (!auth.allowed) return false;
+
   return true;
 };
 
@@ -19,20 +42,39 @@ export const checkCompanyOwnership = async (companyId, userId) => {
 export const createHelbRecord = async (req, res) => {
   const { companyId, employeeId } = req.params;
   const userId = req.userId;
-  const { helb_account_number, initial_balance, monthly_deduction } = req.body;
+  const {
+    helb_account_number,
+    initial_balance,
+    monthly_deduction,
+    start_date,
+    status,
+  } = req.body;
 
-  if (!helb_account_number || initial_balance === undefined || monthly_deduction === undefined) {
-    return res.status(400).json({ error: 'All required fields must be provided.' });
+  if (
+    !helb_account_number ||
+    initial_balance === undefined ||
+    monthly_deduction === undefined
+  ) {
+    return res
+      .status(400)
+      .json({ error: "All required fields must be provided." });
   }
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_write",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to access this company.' });
+      return res.status(403).json({
+        error: "Unauthorized to add employee's HELB details.",
+      });
     }
 
     const { data: helbData, error: helbError } = await supabase
-      .from('helb_deductions')
+      .from("helb_accounts")
       .insert({
         company_id: companyId,
         employee_id: employeeId,
@@ -40,33 +82,36 @@ export const createHelbRecord = async (req, res) => {
         initial_balance,
         current_balance: initial_balance, // Initialize current_balance with initial_balance
         monthly_deduction,
-        status: 'Active'
+        start_date,
+        status: status || "ACTIVE",
       })
       .select()
       .single();
 
     if (helbError) {
-        throw new Error(`Failed to create HELB record: ${helbError.message}`);
+      throw new Error(`Failed to create HELB record: ${helbError.message}`);
     }
 
     // Update the employee's pays_helb flag to true
     const { data: employeeData, error: employeeError } = await supabase
-      .from('employees')
+      .from("employees")
       .update({ pays_helb: true })
-      .eq('id', employeeId)
-      .eq('company_id', companyId)
+      .eq("id", employeeId)
+      .eq("company_id", companyId)
       .select()
       .single();
 
-      if (employeeError) {
-        // Log the error but don't fail the entire request, as the HELB record was already created.
-        console.error('Failed to update employee pays_helb flag:', employeeError);
+    if (employeeError) {
+      // Log the error but don't fail the entire request, as the HELB record was already created.
+      console.error("Failed to update employee pays_helb flag:", employeeError);
     }
 
     res.status(201).json(helbData);
   } catch (err) {
-    console.error('Create HELB record error:', err);
-    res.status(500).json({ error: err.message || 'Failed to create HELB record.' });
+    console.error("Create HELB record error:", err);
+    res
+      .status(500)
+      .json({ error: err.message || "Failed to create HELB record." });
   }
 };
 
@@ -76,29 +121,39 @@ export const getHelbRecord = async (req, res) => {
   const userId = req.userId;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_read",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to access this HELB record.' });
+      return res.status(403).json({
+        error: "Unauthorized to view employee's HELB details.",
+      });
     }
 
     const { data, error } = await supabase
-      .from('helb_deductions')
-      .select('*')
-      .eq('employee_id', employeeId)
-      .eq('company_id', companyId)
+      .from("helb_accounts")
+      .select("*")
+      .eq("employee_id", employeeId)
+      .eq("company_id", companyId)
       .single();
-    
+
     if (error) {
-      if (error.code === 'PGRST116') { // No rows found
-        return res.status(404).json({ error: 'HELB record not found for this employee.' });
+      if (error.code === "PGRST116") {
+        // No rows found
+        return res
+          .status(404)
+          .json({ error: "HELB record not found for this employee." });
       }
       throw error;
     }
-    
+
     res.status(200).json(data || {});
   } catch (error) {
-    console.error('Get HELB record error:', error);
-    res.status(500).json({ error: 'Failed to get HELB record.' });
+    console.error("Get HELB record error:", error);
+    res.status(500).json({ error: "Failed to get HELB record." });
   }
 };
 
@@ -108,34 +163,48 @@ export const getCompanyHelbRecords = async (req, res) => {
   const userId = req.userId;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_read",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to access this company.' });
+      return res.status(403).json({
+        error: "Unauthorized to view employee(s) HELB details.",
+      });
     }
 
     // Join the helb_deductions table with the employees table to get names
     const { data, error } = await supabase
-      .from('employees')
-      .select(`
+      .from("employees")
+      .select(
+        `
         id,
         first_name,
         last_name,
         employee_number,
-        helb_deductions (
+        helb_accounts (
           id,
           helb_account_number,
           monthly_deduction,
+          start_date,
+           initial_balance,
+            current_balance,
           status
-        )
-      `)
-      .eq('company_id', companyId);
+        ),
+                departments ( name),
+        job_titles ( title)
+      `,
+      )
+      .eq("company_id", companyId);
 
-      if (error) throw error;
+    if (error) throw error;
 
     res.status(200).json(data);
   } catch (err) {
-    console.error('Fetch company HELB records error:', err);
-    res.status(500).json({ error: 'Failed to fetch company HELB records.' });
+    console.error("Fetch company HELB records error:", err);
+    res.status(500).json({ error: "Failed to fetch company HELB records." });
   }
 };
 
@@ -143,19 +212,52 @@ export const getCompanyHelbRecords = async (req, res) => {
 export const updateHelbRecord = async (req, res) => {
   const { companyId, employeeId } = req.params;
   const userId = req.userId;
-  const { monthly_deduction, status } = req.body;
+  const {
+    helb_account_number,
+    initial_balance,
+    current_balance,
+    monthly_deduction,
+    status,
+    start_date,
+  } = req.body;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_write",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to update this HELB record.' });
+      return res.status(403).json({
+        error: "Unauthorized to upate employee's HELB details.",
+      });
     }
 
+    // Build update object with only provided fields
+    const updateData = {};
+    if (helb_account_number !== undefined)
+      updateData.helb_account_number = helb_account_number;
+    if (initial_balance !== undefined) {
+      updateData.initial_balance = initial_balance;
+      // Optionally update current_balance if initial_balance changes and no explicit current_balance provided
+      if (current_balance === undefined) {
+        updateData.current_balance = initial_balance;
+      }
+    }
+    if (current_balance !== undefined)
+      updateData.current_balance = current_balance;
+    if (monthly_deduction !== undefined)
+      updateData.monthly_deduction = monthly_deduction;
+    if (status !== undefined) updateData.status = status;
+    if (start_date !== undefined) updateData.start_date = start_date;
+    updateData.updated_at = new Date();
+
     const { data, error } = await supabase
-      .from('helb_deductions')
-      .update({ monthly_deduction, status })
-      .eq('employee_id', employeeId)
-      .eq('company_id', companyId)
+      .from("helb_accounts")
+      .update(updateData)
+      .eq("employee_id", employeeId)
+      .eq("company_id", companyId)
       .select()
       .single();
 
@@ -163,7 +265,8 @@ export const updateHelbRecord = async (req, res) => {
 
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update HELB record' });
+    console.error("Update HELB record error:", err);
+    res.status(500).json({ error: "Failed to update HELB record" });
   }
 };
 
@@ -173,17 +276,24 @@ export const deleteHelbRecord = async (req, res) => {
   const userId = req.userId;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_delete",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to delete this HELB record.' });
+      return res.status(403).json({
+        error: "Unauthorized to delete employee's HELB details.",
+      });
     }
 
     // First, delete the HELB record
     const { error: deleteError } = await supabase
-      .from('helb_deductions')
+      .from("helb_accounts")
       .delete()
-      .eq('employee_id', employeeId)
-      .eq('company_id', companyId);
+      .eq("employee_id", employeeId)
+      .eq("company_id", companyId);
 
     if (deleteError) {
       throw new Error(`Failed to delete HELB record: ${deleteError.message}`);
@@ -191,18 +301,21 @@ export const deleteHelbRecord = async (req, res) => {
 
     // Then, update the employee's pays_helb flag back to false
     const { error: employeeError } = await supabase
-      .from('employees')
+      .from("employees")
       .update({ pays_helb: false })
-      .eq('id', employeeId)
-      .eq('company_id', companyId);
+      .eq("id", employeeId)
+      .eq("company_id", companyId);
 
     if (employeeError) {
-      console.error('Failed to update employee pays_helb flag after deletion:', employeeError);
+      console.error(
+        "Failed to update employee pays_helb flag after deletion:",
+        employeeError,
+      );
     }
 
-     res.status(200).json({ message: 'HELB record deleted successfully.' });
+    res.status(200).json({ message: "HELB record deleted successfully." });
   } catch (err) {
-    console.error('Delete HELB record error:', err);
-    res.status(500).json({ error: 'Failed to delete HELB record.' });
+    console.error("Delete HELB record error:", err);
+    res.status(500).json({ error: "Failed to delete HELB record." });
   }
 };

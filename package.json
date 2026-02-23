@@ -1,6 +1,6 @@
 {
   "name": "wagewise-backend",
-  "version": "2.0.5",
+  "version": "3.0.0",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -14,6 +14,7 @@
   "type": "module",
   "dependencies": {
     "@supabase/supabase-js": "^2.55.0",
+    "bcryptjs": "^3.0.3",
     "cors": "^2.8.5",
     "csv-stringify": "^6.6.0",
     "date-fns": "^4.1.0",
@@ -28,6 +29,7 @@
     "pdfkit": "^0.17.1",
     "pdfmake": "^0.2.20",
     "resend": "^6.9.1",
+    "sib-api-v3-sdk": "^8.5.0",
     "uuid": "^11.1.0",
     "xlsx": "^0.18.5"
   },

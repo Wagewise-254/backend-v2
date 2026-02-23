@@ -6,16 +6,16 @@ import {
   deleteHelbRecord,
   getCompanyHelbRecords,
 } from '../controllers/helbController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
 
 const router = express.Router({ mergeParams: true });
 
 // Route to get all HELB records for a company
-router.get('/helb', verifyToken, getCompanyHelbRecords)
+router.get('/:companyId/helb', verifyToken, getCompanyHelbRecords)
 
-router.post('/employees/:employeeId/helb', verifyToken, createHelbRecord);
-router.get('/employees/:employeeId/helb', verifyToken, getHelbRecord);
-router.put('/employees/:employeeId/helb', verifyToken, updateHelbRecord);
-router.delete('/employees/:employeeId/helb', verifyToken, deleteHelbRecord);
+router.post('/:companyId/employees/:employeeId/helb', verifyToken, createHelbRecord);
+router.get('/:companyId/employees/:employeeId/helb', verifyToken, getHelbRecord);
+router.put('/:companyId/employees/:employeeId/helb', verifyToken, updateHelbRecord);
+router.delete('/:companyId/employees/:employeeId/helb', verifyToken, deleteHelbRecord);
 
 export default router;

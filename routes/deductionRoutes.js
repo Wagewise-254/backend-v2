@@ -9,7 +9,7 @@ import {
   importDeductions,
   bulkDeleteDeductions
 } from '../controllers/deductionController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
 import multer from 'multer';
 
 const router = express.Router();

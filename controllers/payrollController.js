@@ -1,11 +1,8 @@
 // backend/controllers/payrollController.js
-
-import supabase from "../libs/supabaseClient.js";
+import supabase from "../libs/supabaseAdmin.js";
 import { v4 as uuidv4 } from "uuid";
 
-// --- Helper Functions for Kenyan Statutory Deductions ---
-
-// Define monthNames globally so all helpers can access it
+// --- Constants ---
 const monthNames = [
   "January",
   "February",
@@ -21,63 +18,121 @@ const monthNames = [
   "December",
 ];
 
-// This function returns the last day of the payroll month for comparison
-const getPayrollRunDate = (month, year) => {
-  // Date constructor (year, monthIndex + 1, day = 0) returns the last day of the previous month
-  // We use (year, monthIndex + 1, 0) to get the last day of the target month
+const DISABILITY_EXEMPTION = 150000; // Annual tax exemption for PWDs
+const INSURANCE_RELIEF_CAP = 5000;
+const PERSONAL_RELIEF = 2400;
+const MEAL_EXEMPTION_LIMIT = 5000;
+
+// Helper to get date from month/year
+const getMonthEndDate = (month, year) => {
   return new Date(year, monthNames.indexOf(month) + 1, 0);
 };
 
-// As of 2024/2025 financial year
-const calculatePAYE = (taxableIncome) => {
-  let paye = 0;
-  let personalRelief = 2400; // Monthly personal relief
+// Helper to check if employee was active during payroll period
+const isEmployeeActiveDuringPeriod = (employee, payrollMonth, payrollYear) => {
+  const payrollEndDate = getMonthEndDate(payrollMonth, payrollYear);
+  const hireDate = new Date(employee.hire_date);
 
-  if (taxableIncome <= 24000) {
-    paye = taxableIncome * 0.1;
-  } else if (taxableIncome <= 32333) {
-    paye = 2400 + (taxableIncome - 24000) * 0.25;
-  } else if (taxableIncome <= 500000) {
-    paye = 2400 + 2083.25 + (taxableIncome - 32333) * 0.3;
-  } else if (taxableIncome <= 800000) {
-    paye = 2400 + 2083.25 + 140300.1 + (taxableIncome - 500000) * 0.325;
-  } else {
-    paye = 2400 + 2083.25 + 140300.1 + 97500 + (taxableIncome - 800000) * 0.35;
+  // Must be hired on or before payroll period end
+  if (hireDate > payrollEndDate) return false;
+
+  // Check contract end date if exists
+  if (employee.employee_contracts?.end_date) {
+    const contractEndDate = new Date(employee.employee_contracts.end_date);
+    if (contractEndDate < payrollEndDate) return false;
   }
 
-  // Apply personal relief
-  let finalPaye = paye - personalRelief;
-  return Math.ceil(Math.max(0, finalPaye)); // PAYE cannot be negative
+  // Check status effective date for exclusions
+  if (employee.employee_status_effective_date) {
+    const statusEffectiveDate = new Date(
+      employee.employee_status_effective_date,
+    );
+    const excludedStatuses = ["TERMINATED", "SUSPENDED", "RETIRED"];
+
+    if (excludedStatuses.includes(employee.employee_status)) {
+      if (statusEffectiveDate <= payrollEndDate) return false;
+    }
+  }
+
+  return true;
 };
 
-// NSSF Tiered Contribution (New rates)
-const calculateNSSF = (basicSalary, payrollMonth, payrollYear) => {
-  let tier1_cap;
-  let tier2_cap;
-  const nssf_rate = 0.06;
-  let tier1_deduction = 0;
-  let tier2_deduction = 0;
+// --- Statutory Calculation Functions ---
+const calculatePAYE = (taxableIncome, isDisabled = false) => {
+  let annualTaxableIncome = taxableIncome * 12;
+  let annualTax = 0;
 
+  // Apply disability exemption if applicable (annual)
+  if (isDisabled) {
+    annualTaxableIncome = Math.max(
+      0,
+      annualTaxableIncome - DISABILITY_EXEMPTION,
+    );
+  }
+
+  // Monthly bands
+  if (annualTaxableIncome <= 288000) {
+    // 24,000 * 12
+    annualTax = annualTaxableIncome * 0.1;
+  } else if (annualTaxableIncome <= 388000) {
+    // 32,333 * 12
+    annualTax = 28800 + (annualTaxableIncome - 288000) * 0.25;
+  } else if (annualTaxableIncome <= 6000000) {
+    // 500,000 * 12
+    annualTax = 28800 + 25000 + (annualTaxableIncome - 388000) * 0.3;
+  } else if (annualTaxableIncome <= 9600000) {
+    // 800,000 * 12
+    annualTax =
+      28800 + 25000 + 1683600 + (annualTaxableIncome - 6000000) * 0.325;
+  } else {
+    annualTax =
+      28800 +
+      25000 +
+      1683600 +
+      1170000 +
+      (annualTaxableIncome - 9600000) * 0.35;
+  }
+
+  // Convert to monthly and apply personal relief
+  let monthlyTax = annualTax / 12;
+  let finalTax = monthlyTax - PERSONAL_RELIEF;
+
+  return Math.ceil(Math.max(0, finalTax));
+};
+
+const calculateNSSF = (
+  pensionablePay,
+  payrollMonth,
+  payrollYear,
+  employeeType = "PRIMARY",
+) => {
   const payrollMonthIndex = monthNames.indexOf(payrollMonth);
+  let tier1_cap, tier2_cap;
+  const nssf_rate = 0.06;
+
+  // Date-based caps
   if (payrollYear > 2025 || (payrollYear === 2025 && payrollMonthIndex >= 1)) {
-    // February 2025 onwards
     tier1_cap = 8000;
     tier2_cap = 72000;
   } else {
-    // Up to January 2025
     tier1_cap = 7000;
     tier2_cap = 36000;
   }
 
-  tier1_deduction = Math.min(basicSalary, tier1_cap) * nssf_rate;
-
-  if (basicSalary > tier1_cap) {
-    tier2_deduction =
-      Math.min(basicSalary - tier1_cap, tier2_cap - tier1_cap) * nssf_rate;
+  // Adjust caps based on employee type
+  if (employeeType === "SECONDARY") {
+    tier1_cap = Math.min(tier1_cap, 4500);
+    tier2_cap = Math.min(tier2_cap, 45000);
   }
 
-  // The total contribution is tax-deductible for PAYE.
-  // The law is 6% of pensionable earnings for each.
+  let tier1_deduction = Math.min(pensionablePay, tier1_cap) * nssf_rate;
+  let tier2_deduction = 0;
+
+  if (pensionablePay > tier1_cap) {
+    tier2_deduction =
+      Math.min(pensionablePay - tier1_cap, tier2_cap - tier1_cap) * nssf_rate;
+  }
+
   return {
     tier1: tier1_deduction,
     tier2: tier2_deduction,
@@ -85,21 +140,32 @@ const calculateNSSF = (basicSalary, payrollMonth, payrollYear) => {
   };
 };
 
-// SHIF (NHIF) Contributions (New rates as of SHIF Act 2023)
 const calculateSHIF = (grossSalary) => {
-  const shif = grossSalary * 0.0275; // Flat rate of 2.75% of gross pay
-  return Math.round(shif);
+  return Math.round(grossSalary * 0.0275);
 };
 
-// Housing Levy with rounding
 const calculateHousingLevy = (grossSalary) => {
-  const levy = grossSalary * 0.015;
-  return Math.round(levy);
+  return Math.round(grossSalary * 0.015);
+};
+
+// --- Non-Cash Benefit Calculations ---
+const calculateCarBenefit = (carValue) => {
+  // Simplified car benefit calculation (2% of car value per month)
+  return carValue * 0.02;
+};
+
+const calculateMealBenefit = (mealValue) => {
+  if (mealValue <= MEAL_EXEMPTION_LIMIT) return 0;
+  return mealValue - MEAL_EXEMPTION_LIMIT;
+};
+
+const calculateHousingBenefit = (houseValue, grossPay) => {
+  const fifteenPercentGross = grossPay * 0.15;
+  return Math.max(fifteenPercentGross, houseValue);
 };
 
 // --- Main Payroll Functions ---
-
-export const calculatePayroll = async (req, res) => {
+export const syncPayroll = async (req, res) => {
   const { companyId } = req.params;
   const { month: payrollMonth, year: payrollYear } = req.body;
   const userId = req.userId;
@@ -109,101 +175,96 @@ export const calculatePayroll = async (req, res) => {
   }
 
   try {
-    // 1. Check if a payroll run for this month/year already exists
-    const { data: existingRun, error: runError } = await supabase
+    // 1. Check for existing payroll run
+    const { data: existingRun } = await supabase
       .from("payroll_runs")
-      .select("id, status")
+      .select("id, status, payroll_number")
       .eq("company_id", companyId)
       .eq("payroll_month", payrollMonth)
       .eq("payroll_year", payrollYear)
       .maybeSingle();
 
-    if (runError && runError.code !== "PGRST116") {
-      // PGRST116 is for not-found
-      throw new Error("Failed to check for existing payroll run.");
+    let payrollRunId = existingRun?.id;
+    const isNewRun = !existingRun;
+
+    // 2. Generate payroll number if new run
+    if (isNewRun) {
+      const { count } = await supabase
+        .from("payroll_runs")
+        .select("*", { count: "exact", head: true })
+        .eq("company_id", companyId)
+        .eq("payroll_month", payrollMonth)
+        .eq("payroll_year", payrollYear);
+
+      const payrollCount = count || 0;
+      const monthNum = String(monthNames.indexOf(payrollMonth) + 1).padStart(
+        2,
+        "0",
+      );
+      const sequence = String(payrollCount + 1).padStart(3, "0");
+      const payrollNumber = `PR-${payrollYear}${monthNum}-${sequence}`;
+
+      // Create new payroll run
+      const newRunId = uuidv4();
+      const { error: createError } = await supabase
+        .from("payroll_runs")
+        .insert({
+          id: newRunId,
+          company_id: companyId,
+          payroll_number: payrollNumber,
+          payroll_month: payrollMonth,
+          payroll_year: payrollYear,
+          payroll_date: new Date().toISOString().split("T")[0],
+          status: "DRAFT",
+          created_at: new Date().toISOString(),
+        });
+
+      if (createError) throw createError;
+      payrollRunId = newRunId;
     }
 
-    if (existingRun && existingRun.status === "Completed") {
-      return res
-        .status(409)
-        .json({ error: "Payroll for this period has already been completed." });
-    } else if (existingRun) {
-      // Delete existing draft to create a new one.
-      await supabase.from("payroll_runs").delete().eq("id", existingRun.id);
-      await supabase
-        .from("payroll_details")
-        .delete()
-        .eq("payroll_run_id", existingRun.id);
-    }
-
-    // 2. Generate a unique payroll number for documents
-    const { count, error: countError } = await supabase
-      .from("payroll_runs")
-      .select("*", { count: "exact", head: true })
-      .eq("company_id", companyId)
-      .eq("payroll_month", payrollMonth)
-      .eq("payroll_year", payrollYear);
-
-    if (countError) throw new Error("Failed to count previous payroll runs.");
-
-    const payrollCount = count || 0;
-    const payrollNumber = `PR-${payrollYear}${String(
-      new Date(`${payrollMonth} 1, ${payrollYear}`).getMonth() + 1
-    ).padStart(2, "0")}-${Date.now().toString().slice(-6)}`;
-
-    // 3. Fetch all active employees for the company
+    // 3. Fetch employees with all necessary relations
     const { data: employees, error: employeesError } = await supabase
       .from("employees")
-      .select("*")
-      .eq("company_id", companyId);
+      .select(
+        `
+        *,
+        employee_contracts!inner (
+          id,
+          contract_type,
+          start_date,
+          end_date,
+          contract_status
+        ),
+        employee_payment_details (
+          payment_method,
+          bank_name,
+          bank_code,
+          branch_name,
+          branch_code,
+          account_number,
+          account_name,
+          mobile_type,
+          phone_number
+        ),
+        helb_accounts (
+          id,
+          helb_account_number,
+          monthly_deduction,
+          current_balance,
+          status
+        )
+      `,
+      )
+      .eq("company_id", companyId)
+      .eq("employee_contracts.contract_status", "ACTIVE");
 
     if (employeesError) throw new Error("Failed to fetch employees.");
 
-    if (employees.length === 0) {
-      return res
-        .status(404)
-        .json({ message: "No employees found for the company." });
-    }
-
-    // ---  Filter Employees by Historical Eligibility ---
-    const payrollRunDate = getPayrollRunDate(payrollMonth, payrollYear);
-    const eligibleEmployees = employees.filter((employee) => {
-      const dateJoined = new Date(employee.date_joined);
-
-      // 1. Employee must have joined on or before the payroll month's end date.
-      if (dateJoined > payrollRunDate) {
-        return false;
-      }
-
-      // 2. Check the employee's status effective date relative to the payroll period.
-      const employeeStatus = employee.employee_status;
-      const statusEffectiveDate = new Date(
-        employee.employee_status_effective_date
-      );
-
-      // Statuses that generally require payroll processing:
-      const isIncludedStatus =
-        employeeStatus === "Active" || employeeStatus === "On Leave";
-
-      // Statuses that exclude payroll processing:
-      const isExcludedStatus =
-        employeeStatus === "Terminated" ||
-        employeeStatus === "Suspended" ||
-        employeeStatus === "Retired";
-
-      // If the employee's *current* status is an excluded one, we check *when* it became effective.
-      if (isExcludedStatus) {
-        // If the termination/exclusion was effective ON or BEFORE the payroll run date, EXCLUDE.
-        if (statusEffectiveDate <= payrollRunDate) {
-          return false;
-        }
-      }
-
-      // If the status is one of the excluded ones, but the effective date is *after* the payroll run date,
-      // the employee was still eligible for this historical run (e.g., terminated in June, running Feb payroll).
-
-      return true; // Employee is eligible (joined on time, and not excluded by status effective date)
-    });
+    // 4. Filter eligible employees
+    const eligibleEmployees = employees.filter((emp) =>
+      isEmployeeActiveDuringPeriod(emp, payrollMonth, payrollYear),
+    );
 
     if (eligibleEmployees.length === 0) {
       return res.status(404).json({
@@ -211,413 +272,480 @@ export const calculatePayroll = async (req, res) => {
       });
     }
 
-    // 4. Fetch all employee bank details for the *eligible* employees
-    const { data: bankDetails, error: bankDetailsError } = await supabase
-      .from("employee_bank_details")
-      .select("*")
-      .in(
-        "employee_id",
-        eligibleEmployees.map((emp) => emp.id)
+    // 5. Fetch allowances and deductions with their types
+    const [allowancesResult, deductionsResult] = await Promise.all([
+      supabase
+        .from("allowances")
+        .select(
+          `
+          *,
+          allowance_types!inner (
+            code,
+            name,
+            is_cash,
+            is_taxable,
+            has_maximum_value,
+            maximum_value
+          )
+        `,
+        )
+        .eq("company_id", companyId)
+        .eq("is_recurring", true)
+        .or(
+          `end_date.is.null,end_date.gte.${getMonthEndDate(payrollMonth, payrollYear).toISOString().split("T")[0]}`,
+        )
+        .lte(
+          "start_date",
+          getMonthEndDate(payrollMonth, payrollYear)
+            .toISOString()
+            .split("T")[0],
+        ),
+
+      supabase
+        .from("deductions")
+        .select(
+          `
+          *,
+          deduction_types!inner (
+            code,
+            name,
+            is_pre_tax,
+            has_maximum_value,
+            maximum_value
+          )
+        `,
+        )
+        .eq("company_id", companyId)
+        .eq("is_recurring", true)
+        .or(
+          `end_date.is.null,end_date.gte.${getMonthEndDate(payrollMonth, payrollYear).toISOString().split("T")[0]}`,
+        )
+        .lte(
+          "start_date",
+          getMonthEndDate(payrollMonth, payrollYear)
+            .toISOString()
+            .split("T")[0],
+        ),
+    ]);
+
+    if (allowancesResult.error) throw new Error("Failed to fetch allowances.");
+    if (deductionsResult.error) throw new Error("Failed to fetch deductions.");
+
+    const allAllowances = allowancesResult.data;
+    const allDeductions = deductionsResult.data;
+
+    // 6. Delete existing payroll details if any (for sync operation)
+    if (!isNewRun) {
+      await supabase
+        .from("payroll_details")
+        .delete()
+        .eq("payroll_run_id", payrollRunId);
+    }
+    // NEW: Also delete existing reviews for this run before recreating details
+    if (!isNewRun) {
+      // We join through payroll_details to find reviews associated with this run
+      const { data: oldDetails } = await supabase
+        .from("payroll_details")
+        .select("id")
+        .eq("payroll_run_id", payrollRunId);
+
+      if (oldDetails?.length > 0) {
+        const detailIds = oldDetails.map((d) => d.id);
+        await supabase
+          .from("payroll_reviews")
+          .delete()
+          .in("payroll_detail_id", detailIds);
+      }
+    }
+
+    // 7. Calculate payroll for each employee
+    const payrollDetailsToInsert = [];
+    let totals = {
+      totalGrossPay: 0,
+      totalStatutoryDeductions: 0,
+      totalPaye: 0,
+      totalNetPay: 0,
+      totalNSSF: 0,
+      totalSHIF: 0,
+      totalHousingLevy: 0,
+      totalHELB: 0,
+    };
+
+    for (const employee of eligibleEmployees) {
+      // Get employee type from contract
+      const employeeType =
+        employee.employee_contracts?.contract_type || "PRIMARY";
+      const isDisabled = employee.has_disability || false;
+
+      // Basic salary
+      let basicSalary = parseFloat(employee.salary);
+
+      // Cash allowances and non-cash benefits
+      let cashAllowances = 0;
+      let nonCashTaxableBenefits = 0;
+      let allowancesDetails = [];
+
+      // Process allowances
+      const employeeAllowances = allAllowances.filter(
+        (a) =>
+          a.employee_id === employee.id ||
+          (a.employee_id === null &&
+            a.department_id === employee.department_id) ||
+          a.applies_to === "COMPANY",
       );
 
-    if (bankDetailsError)
-      throw new Error("Failed to fetch employee bank details.");
-    const bankDetailsMap = new Map(
-      bankDetails.map((item) => [item.employee_id, item])
-    );
-
-    // 5. Create a new payroll run entry
-    const payrollRunId = uuidv4();
-
-    await supabase.from("payroll_runs").insert({
-      id: payrollRunId,
-      company_id: companyId,
-      payroll_number: payrollNumber,
-      payroll_month: payrollMonth,
-      payroll_year: payrollYear,
-      payroll_date: new Date().toISOString().split("T")[0],
-      status: "Draft",
-    });
-
-    const payrollDetailsToInsert = [];
-    let totalGrossPay = 0;
-    let totalStatutoryDeductions = 0;
-    let totalPaye = 0;
-    let totalNetPay = 0;
-
-    const today = new Date().toISOString().split("T")[0];
-
-    // Helper function to check if an allowance applies to the current payroll month/year
-    const allowanceApplies = (allowance) => {
-      const isAfterStart =
-        allowance.start_year < payrollYear ||
-        (allowance.start_year === payrollYear &&
-          monthNames.indexOf(allowance.start_month) <=
-            monthNames.indexOf(payrollMonth));
-
-      const isBeforeEnd =
-        allowance.end_year === null ||
-        allowance.end_year > payrollYear ||
-        (allowance.end_year === payrollYear &&
-          monthNames.indexOf(allowance.end_month) >=
-            monthNames.indexOf(payrollMonth));
-
-      // For non-recurring allowances, it must ONLY apply if the start month/year exactly matches the payroll month/year
-      if (!allowance.is_recurring) {
-        return (
-          allowance.start_month === payrollMonth &&
-          allowance.start_year === payrollYear
-        );
-      }
-
-      // For recurring allowances, it must be between start and end (inclusive)
-      return isAfterStart && isBeforeEnd;
-    };
-
-    // Helper function to check if a deduction applies to the current payroll month/year
-    const deductionApplies = (deduction) => {
-      const isAfterStart =
-        deduction.start_year < payrollYear ||
-        (deduction.start_year === payrollYear &&
-          monthNames.indexOf(deduction.start_month) <=
-            monthNames.indexOf(payrollMonth));
-
-      const isBeforeEnd =
-        deduction.end_year === null ||
-        deduction.end_year > payrollYear ||
-        (deduction.end_year === payrollYear &&
-          monthNames.indexOf(deduction.end_month) >=
-            monthNames.indexOf(payrollMonth));
-
-      // For non-recurring deductions, it must ONLY apply if the start month/year exactly matches the payroll month/year
-      if (!deduction.is_recurring) {
-        return (
-          deduction.start_month === payrollMonth &&
-          deduction.start_year === payrollYear
-        );
-      }
-
-      // For recurring deductions, it must be between start and end (inclusive)
-      return isAfterStart && isBeforeEnd;
-    };
-
-    // Fetch all active allowances for the company
-    const { data: allAllowances, error: allAllowancesError } = await supabase
-      .from("allowances")
-      .select(
-        `*, allowance_types:allowance_type_id (name, is_cash, is_taxable)`
-      )
-      .eq("company_id", companyId);
-
-    if (allAllowancesError) throw new Error("Failed to fetch allowances.");
-
-    // Fetch all active deductions for the company
-    const { data: allDeductions, error: allDeductionsError } = await supabase
-      .from("deductions")
-      .select(
-        `*, deduction_types:deduction_type_id (name, is_tax_deductible, has_maximum_value, maximum_value)`
-      )
-      .eq("company_id", companyId);
-
-    if (allDeductionsError) throw new Error("Failed to fetch deductions.");
-
-    // 6. Loop through each eligible employee and calculate payroll
-    for (const employee of eligibleEmployees) {
-      let basicSalary = parseFloat(employee.salary);
-      let totalAllowances = 0;
-      let totalNonCashBenefits = 0;
-      let totalCustomDeductions = 0;
-      let allowancesDetails = [];
-      let deductionsDetails = [];
-      let insurancePremium = 0;
-      let insuranceRelief = 0;
-      let mortgageDeduction = 0;
-
-      // Get only this employee’s or department’s allowances
-      const allowances = allAllowances.filter((a) => {
-        const isEmployeeSpecific =
-          a.employee_id === employee.id && allowanceApplies(a);
-        const isDepartmentSpecific =
-          a.employee_id === null &&
-          a.department_id === employee.department_id &&
-          allowanceApplies(a);
-
-        // Employee-specific allowances take precedence, or apply department-wide if not employee-specific
-        return isEmployeeSpecific || isDepartmentSpecific;
-      });
-
-      for (const allowance of allowances) {
-        if (!allowance.allowance_types) {
-          // You can log a warning or simply skip this allowance
-          console.warn(
-            `Skipping allowance with ID ${allowance.id} due to missing allowance_type.`
-          );
-          continue;
-        }
+      for (const allowance of employeeAllowances) {
         let allowanceValue = 0;
-        if (allowance.calculation_type === "Fixed") {
+
+        if (allowance.calculation_type === "FIXED") {
           allowanceValue = parseFloat(allowance.value);
-        } else if (allowance.calculation_type === "Percentage") {
+        } else if (allowance.calculation_type === "PERCENTAGE") {
           allowanceValue = basicSalary * (parseFloat(allowance.value) / 100);
         }
 
-        if (allowance.allowance_types.is_cash) {
-          totalAllowances += allowanceValue;
+        // Apply maximum value constraint
+        if (allowance.allowance_types.has_maximum_value) {
+          allowanceValue = Math.min(
+            allowanceValue,
+            allowance.allowance_types.maximum_value,
+          );
+        }
+
+        const allowanceCode = allowance.allowance_types.code;
+        const isCash = allowance.allowance_types.is_cash;
+
+        // Categorize allowances
+        if (isCash) {
+          cashAllowances += allowanceValue;
+          allowancesDetails.push({
+            code: allowanceCode,
+            name: allowance.allowance_types.name,
+            value: allowanceValue,
+            type: "CASH",
+            is_taxable: allowance.allowance_types.is_taxable,
+          });
         } else {
-          totalNonCashBenefits += allowanceValue;
-        }
+          // Process non-cash benefits based on code
+          let taxableValue = 0;
 
-        allowancesDetails.push({
-          name: allowance.allowance_types.name,
-          value: allowanceValue,
-          is_cash: allowance.allowance_types.is_cash,
-          is_taxable: allowance.allowance_types.is_taxable,
-        });
+          switch (allowanceCode) {
+            case "CAR":
+              taxableValue = calculateCarBenefit(allowanceValue);
+              break;
+            case "MEAL":
+              taxableValue = calculateMealBenefit(allowanceValue);
+              break;
+            case "HOUSING":
+              // Will calculate after we have gross pay
+              break;
+            default:
+              taxableValue = allowanceValue;
+          }
+
+          if (allowanceCode === "HOUSING") {
+            // Store for later calculation
+            allowancesDetails.push({
+              code: "HOUSING",
+              name: allowance.allowance_types.name,
+              raw_value: allowanceValue,
+              type: "NON_CASH_HOUSING",
+              is_taxable: true,
+            });
+          } else {
+            nonCashTaxableBenefits += taxableValue;
+            allowancesDetails.push({
+              code: allowanceCode,
+              name: allowance.allowance_types.name,
+              value: taxableValue,
+              raw_value: allowanceValue,
+              type: "NON_CASH",
+              is_taxable: true,
+            });
+          }
+        }
       }
 
-      // Get only this employee’s or department’s deductions
-      const deductions = allDeductions.filter((d) => {
-        const isEmployeeSpecific =
-          d.employee_id === employee.id && deductionApplies(d);
-        const isDepartmentSpecific =
-          d.employee_id === null &&
-          d.department_id === employee.department_id &&
-          deductionApplies(d);
-
-        // Employee-specific deductions take precedence, or apply department-wide if not employee-specific
-        return isEmployeeSpecific || isDepartmentSpecific;
-      });
-
-      let processedDeductions = new Set();
-      for (const deduction of deductions) {
-        if (!deduction.deduction_types) {
-          // You can log a warning or simply skip this deduction
-          console.warn(
-            `Skipping deduction with ID ${deduction.id} due to missing deduction_types.`
-          );
-          continue;
-        }
-        // Check if this deduction name has already been processed
-        if (processedDeductions.has(deduction.deduction_types.name)) {
-          console.warn(
-            `Skipping duplicate deduction for ${employee.first_name}: ${deduction.deduction_types.name}`
-          );
-          continue;
-        }
-        processedDeductions.add(deduction.deduction_types.name);
-        let deductionValue = 0;
-        if (deduction.calculation_type === "Fixed") {
-          deductionValue = parseFloat(deduction.value);
-        } else if (deduction.calculation_type === "Percentage") {
-          deductionValue = basicSalary * (parseFloat(deduction.value) / 100);
-        }
-
-        // Check for maximum value constraint
-        const deductionType = deduction.deduction_types;
-        if (
-          deductionType.has_maximum_value &&
-          deductionValue > deductionType.maximum_value
-        ) {
-          deductionValue = deductionType.maximum_value;
-        }
-
-        totalCustomDeductions += deductionValue;
-        let appliedValue = deductionValue;
-
-        // Detect Insurance for relief calculation
-        // Detect Insurance for relief calculation
-        if (deductionType.name.toLowerCase().includes("insurance")) {
-          let reliefCandidate = deductionValue * 0.15;
-          insuranceRelief += Math.min(reliefCandidate, 5000);
-        } else if (deductionType.name.toLowerCase().includes("mortgage")) {
-          // Apply mortgage cap at 30,000
-          mortgageDeduction += Math.min(deductionValue, 30000);
-        }
-
-        // Push the calculated and processed deduction into the array
-        deductionsDetails.push({
-          name: deductionType.name,
-          value: deductionValue,
-          is_tax_deductible: deductionType.is_tax_deductible,
-        });
-      }
+      // Calculate gross pay for statutory deductions (Basic + Cash Allowances)
+      let grossPayForStatutory = basicSalary + cashAllowances;
 
       // Calculate statutory deductions
-      let grossPay = basicSalary + totalAllowances;
-      let totalGrossPay_withNonCash = grossPay + totalNonCashBenefits;
-      let nssfTiers = employee.pays_nssf
-        ? calculateNSSF(grossPay, payrollMonth, payrollYear)
+      const nssfResult = employee.pays_nssf
+        ? calculateNSSF(
+            grossPayForStatutory,
+            payrollMonth,
+            payrollYear,
+            employeeType,
+          )
         : { tier1: 0, tier2: 0, total: 0 };
-      let nssfDeduction = nssfTiers.total;
-      let shifDeduction = employee.shif_number ? calculateSHIF(grossPay) : 0;
-      let housingLevyDeduction = employee.pays_housing_levy
-        ? calculateHousingLevy(grossPay)
+
+      const shifDeduction = employee.pays_shif
+        ? calculateSHIF(grossPayForStatutory)
+        : 0;
+      const housingLevyDeduction = employee.pays_housing_levy
+        ? calculateHousingLevy(grossPayForStatutory)
         : 0;
 
-      // Calculate taxable income
+      // Process housing benefit now that we have gross pay
+      let housingBenefit = 0;
+      const housingAllowance = allowancesDetails.find(
+        (a) => a.code === "HOUSING",
+      );
+      if (housingAllowance) {
+        housingBenefit = calculateHousingBenefit(
+          housingAllowance.raw_value,
+          grossPayForStatutory,
+        );
+        nonCashTaxableBenefits += housingBenefit;
+        housingAllowance.value = housingBenefit;
+        housingAllowance.raw_value = housingAllowance.raw_value;
+      }
 
+      // Calculate total gross pay including non-cash taxable benefits
+      let totalGrossPay = grossPayForStatutory + nonCashTaxableBenefits;
+
+      // Process deductions
+      let preTaxDeductions = 0;
+      let postTaxDeductions = 0;
+      let deductionsDetails = [];
+      let insurancePremium = 0;
+
+      const employeeDeductions = allDeductions.filter(
+        (d) =>
+          d.employee_id === employee.id ||
+          (d.employee_id === null &&
+            d.department_id === employee.department_id) ||
+          d.applies_to === "COMPANY",
+      );
+
+      for (const deduction of employeeDeductions) {
+        let deductionValue = 0;
+
+        if (deduction.calculation_type === "FIXED") {
+          deductionValue = parseFloat(deduction.value);
+        } else if (deduction.calculation_type === "PERCENTAGE") {
+          deductionValue =
+            grossPayForStatutory * (parseFloat(deduction.value) / 100);
+        }
+
+        // Apply maximum value constraint
+        if (deduction.deduction_types.has_maximum_value) {
+          deductionValue = Math.min(
+            deductionValue,
+            deduction.deduction_types.maximum_value,
+          );
+        }
+
+        const deductionCode = deduction.deduction_types.code;
+        const isPreTax = deduction.deduction_types.is_pre_tax;
+
+        // Track insurance premium for relief calculation
+        if (
+          deductionCode === "PRMF" ||
+          deduction.deduction_types.name.toLowerCase().includes("insurance")
+        ) {
+          insurancePremium += deductionValue;
+        }
+
+        if (isPreTax) {
+          preTaxDeductions += deductionValue;
+        } else {
+          postTaxDeductions += deductionValue;
+        }
+
+        deductionsDetails.push({
+          code: deductionCode,
+          name: deduction.deduction_types.name,
+          value: deductionValue,
+          is_pre_tax: isPreTax,
+        });
+      }
+
+      // Calculate HELB deduction
       let helbDeduction = 0;
-
-      // Handle HELB
-      if (employee.pays_helb) {
-        const { data: helbData, error: helbError } = await supabase
-          .from("helb_deductions")
-          .select("monthly_deduction")
-          .eq("employee_id", employee.id)
-          .maybeSingle();
-
-        if (helbError) throw new Error("Failed to fetch HELB details.");
-        helbDeduction = helbData ? parseFloat(helbData.monthly_deduction) : 0;
+      if (employee.pays_helb && employee.helb_accounts?.length > 0) {
+        const activeHelb = employee.helb_accounts.find(
+          (a) => a.status === "ACTIVE",
+        );
+        if (activeHelb) {
+          helbDeduction = parseFloat(activeHelb.monthly_deduction);
+        }
       }
+      postTaxDeductions += helbDeduction;
 
-      let taxableIncome = grossPay - nssfDeduction;
+      // Calculate taxable income
+      let taxableIncome =
+        totalGrossPay -
+        nssfResult.total -
+        shifDeduction -
+        housingLevyDeduction -
+        preTaxDeductions;
 
-      // Conditionally deduct SHIF and Housing Levy based on the payroll date
-      const payrollDate = new Date(`${payrollMonth} 1, ${payrollYear}`);
-      const deductionStartDate = new Date("December 27, 2024");
+      // Calculate PAYE with disability exemption
+      let payeTax = employee.pays_paye
+        ? calculatePAYE(taxableIncome, isDisabled)
+        : 0;
 
-      // SHIF is tax-deductible from Dec 27, 2024 onwards
-      if (payrollDate >= deductionStartDate) {
-        taxableIncome -= shifDeduction;
-      }
-
-      // Housing Levy is tax-deductible from Dec 27, 2024 onwards
-      if (payrollDate >= deductionStartDate) {
-        taxableIncome -= housingLevyDeduction;
-      }
-
-      let payeTax = employee.pays_paye ? calculatePAYE(taxableIncome) : 0;
-
-      // Apply insurance relief
+      // Calculate insurance relief (15% of premium, capped at 5000)
+      let insuranceRelief = Math.min(
+        insurancePremium * 0.15,
+        INSURANCE_RELIEF_CAP,
+      );
       payeTax = Math.max(0, payeTax - insuranceRelief);
 
-      let totalStatutoryDeductionsPerEmployee =
-        nssfDeduction + shifDeduction + housingLevyDeduction + payeTax;
-      let totalDeductions =
-        totalStatutoryDeductionsPerEmployee +
-        totalCustomDeductions +
-        helbDeduction;
+      // Calculate total deductions and net pay
+      let totalStatutoryDeductions =
+        nssfResult.total + shifDeduction + housingLevyDeduction + payeTax;
+      let totalDeductions = totalStatutoryDeductions + postTaxDeductions;
+      let netPay = totalGrossPay - totalDeductions;
 
-      let netPay = grossPay + totalNonCashBenefits - totalDeductions;
+      // Get payment details
+      const paymentDetails = employee.employee_payment_details || {};
 
-      // Get employee payment details
-      const employeeBankDetails = bankDetailsMap.get(employee.id);
-      let paymentMethod = null;
-      let bankName = null;
-      let accountName = null;
-      let mpesaPhone = null;
-      let bankCode = null;
-      let branchCode = null;
-
-      if (employeeBankDetails) {
-        paymentMethod = employeeBankDetails.payment_method;
-        bankName = employeeBankDetails.bank_name || null;
-        accountName = employeeBankDetails.account_number || null;
-        mpesaPhone = employeeBankDetails.phone_number || null;
-        bankCode = employeeBankDetails.bank_code || null;
-        branchCode = employeeBankDetails.branch_code || null;
-      }
-
-      // Add payroll details for this employee
+      // Prepare payroll detail record
       payrollDetailsToInsert.push({
+        id: uuidv4(),
         payroll_run_id: payrollRunId,
         employee_id: employee.id,
         basic_salary: basicSalary,
-        total_allowances: totalAllowances,
-        total_non_cash_benefits: totalNonCashBenefits,
+        total_cash_allowances: cashAllowances,
+        total_non_cash_benefits: nonCashTaxableBenefits,
+        total_allowances: cashAllowances + nonCashTaxableBenefits,
         total_deductions: totalDeductions,
-        total_statutory_deductions: totalStatutoryDeductionsPerEmployee,
-        gross_pay: totalGrossPay_withNonCash,
+        total_statutory_deductions: totalStatutoryDeductions,
+        total_other_deductions: postTaxDeductions,
+        gross_pay: totalGrossPay,
         taxable_income: taxableIncome,
         paye_tax: payeTax,
-        nssf_deduction: nssfDeduction,
-        nssf_tier1_deduction: nssfTiers.tier1,
-        nssf_tier2_deduction: nssfTiers.tier2,
+        nssf_deduction: nssfResult.total,
+        nssf_tier1_deduction: nssfResult.tier1,
+        nssf_tier2_deduction: nssfResult.tier2,
         shif_deduction: shifDeduction,
         helb_deduction: helbDeduction,
         housing_levy_deduction: housingLevyDeduction,
         net_pay: netPay,
-        payment_method: paymentMethod,
-        bank_name: bankName,
-        account_name: accountName,
-        mpesa_phone: mpesaPhone,
+        payment_method: paymentDetails.payment_method,
+        bank_name: paymentDetails.bank_name,
+        branch_name: paymentDetails.branch_name,
+        branch_code: paymentDetails.branch_code,
+        bank_code: paymentDetails.bank_code,
+        account_name: paymentDetails.account_name,
+        account_number: paymentDetails.account_number,
+        mobile_type: paymentDetails.mobile_type,
+        mobile_phone: paymentDetails.phone_number,
         allowances_details: allowancesDetails,
         deductions_details: deductionsDetails,
         insurance_relief: insuranceRelief,
-        bank_code: bankCode,
-        branch_code: branchCode,
+        created_at: new Date().toISOString(),
       });
 
-      totalGrossPay += totalGrossPay_withNonCash;
-      totalStatutoryDeductions += totalDeductions;
-      totalPaye += payeTax;
-      totalNetPay += netPay;
+      // Update totals
+      totals.totalGrossPay += totalGrossPay;
+      totals.totalStatutoryDeductions += totalStatutoryDeductions;
+      totals.totalPaye += payeTax;
+      totals.totalNetPay += netPay;
+      totals.totalNSSF += nssfResult.total;
+      totals.totalSHIF += shifDeduction;
+      totals.totalHousingLevy += housingLevyDeduction;
+      totals.totalHELB += helbDeduction;
     }
 
-    // 7. Insert all payroll details at once
-    await supabase.from("payroll_details").insert(payrollDetailsToInsert);
+    // 8. Insert all payroll details
+    if (payrollDetailsToInsert.length > 0) {
+      const { error: insertError } = await supabase
+        .from("payroll_details")
+        .insert(payrollDetailsToInsert);
 
-    // 8. Update the payroll run with totals
-    await supabase
+      if (insertError) throw insertError;
+    }
+
+    // 9. Update payroll run totals
+    const { error: updateError } = await supabase
       .from("payroll_runs")
       .update({
-        total_gross_pay: totalGrossPay,
-        total_statutory_deductions: totalStatutoryDeductions,
-        total_paye: totalPaye,
-        total_net_pay: totalNetPay,
+        total_gross_pay: totals.totalGrossPay,
+        total_statutory_deductions: totals.totalStatutoryDeductions,
+        total_net_pay: totals.totalNetPay,
+        updated_at: new Date().toISOString(),
+        status: isNewRun ? "DRAFT" : existingRun.status, // Preserve status if exists
       })
       .eq("id", payrollRunId);
 
+    if (updateError) throw updateError;
+
+    // 10. NEW: Initialize the review pipeline
+    // This ensures that even in DRAFT mode, the "Review Status" page can show
+    // who needs to approve what once the process starts.
+    await initializePayrollReviews(payrollRunId, companyId);
+
+    // 10. Return response
     res.status(200).json({
-      message: "Payroll calculated successfully and saved as a draft.",
+      message: isNewRun
+        ? "Payroll created successfully."
+        : "Payroll synchronized successfully.",
+      payrollRunId,
+      isNewRun,
+      totals,
     });
   } catch (error) {
-    console.error("Payroll calculation error:", error);
-    res.status(500).json({ error: "Failed to calculate payroll." });
+    console.error("Payroll sync error:", error);
+    res.status(500).json({
+      error: "Failed to sync payroll.",
+      details: error.message,
+    });
   }
 };
 
+// Keep other functions but update references
 export const completePayrollRun = async (req, res) => {
   const { payrollRunId } = req.params;
 
   try {
-    // 1. Get the draft payroll run details
     const { data: run, error: runError } = await supabase
       .from("payroll_runs")
-      .select("id, company_id, payroll_month, payroll_year, status")
+      .select("id, status")
       .eq("id", payrollRunId)
       .maybeSingle();
 
     if (runError) throw new Error("Failed to fetch payroll run.");
     if (!run) return res.status(404).json({ error: "Payroll run not found." });
-    if (run.status !== "Draft") {
-      return res
-        .status(400)
-        .json({ error: "Only draft payrolls can be completed." });
+
+    // Allow completion from DRAFT, PREPARED, or UNDER_REVIEW
+    const allowedStatuses = ["DRAFT", "PREPARED", "UNDER_REVIEW"];
+    if (!allowedStatuses.includes(run.status)) {
+      return res.status(400).json({
+        error: `Payroll run cannot be completed from status: ${run.status}`,
+      });
     }
 
-    // 2. Perform one-time updates
-    const { data: details, error: detailsError } = await supabase
+    // Update HELB balances
+    const { data: details } = await supabase
       .from("payroll_details")
       .select("employee_id, helb_deduction")
-      .eq("payroll_run_id", payrollRunId);
+      .eq("payroll_run_id", payrollRunId)
+      .gt("helb_deduction", 0);
 
-    if (detailsError) throw new Error("Failed to fetch payroll details.");
-
-    // Update HELB balances for each employee
-    for (const detail of details) {
-      if (detail.helb_deduction > 0) {
-        await supabase.rpc("update_helb_balance", {
-          p_employee_id: detail.employee_id,
-          p_deduction_amount: detail.helb_deduction,
-        });
+    if (details) {
+      for (const detail of details) {
+        await supabase
+          .from("helb_accounts")
+          .update({
+            current_balance: supabase.raw(
+              `current_balance - ${detail.helb_deduction}`,
+            ),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("employee_id", detail.employee_id)
+          .eq("status", "ACTIVE");
       }
     }
 
-    // 3. Update payroll run status to 'Completed'
+    // Update payroll run status
     const { data: completedRun, error: updateError } = await supabase
       .from("payroll_runs")
-      .update({ status: "Completed", updated_at: new Date().toISOString() })
+      .update({
+        status: "COMPLETED",
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", payrollRunId)
       .select()
       .single();
@@ -637,14 +765,31 @@ export const getPayrollRuns = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("payroll_runs")
-      .select("*")
+      .select(
+        `
+        *,
+        payroll_details (
+          id,
+          employee_id,
+          gross_pay,
+          net_pay
+        )
+      `,
+      )
       .eq("company_id", companyId)
       .order("payroll_year", { ascending: false })
       .order("payroll_month", { ascending: false });
 
     if (error) throw new Error("Failed to fetch payroll runs.");
 
-    res.status(200).json(data);
+    // Add employee count
+    const runsWithCounts = data.map((run) => ({
+      ...run,
+      employee_count: run.payroll_details?.length || 0,
+      payroll_details: undefined, // Remove details from response
+    }));
+
+    res.status(200).json(runsWithCounts);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -658,11 +803,15 @@ export const getPayrollDetails = async (req, res) => {
       .from("payroll_details")
       .select(
         `
-                *,
-                employee:employee_id (
-                    first_name, last_name, employee_number, email
-                )
-            `
+        *,
+        employee:employee_id (
+          first_name,
+          last_name,
+          employee_number,
+          email,
+          has_disability
+        )
+      `,
       )
       .eq("payroll_run_id", runId);
 
@@ -680,17 +829,20 @@ export const cancelPayrollRun = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("payroll_runs")
-      .update({ status: "Cancelled" })
+      .update({
+        status: "CANCELLED",
+        updated_at: new Date().toISOString(),
+      })
       .eq("id", payrollRunId)
-      .eq("status", "Draft") // Only allow canceling drafts
+      .in("status", ["DRAFT", "PREPARED"]) // Only allow canceling drafts or prepared
       .select();
 
     if (error) throw new Error("Failed to cancel payroll run.");
 
     if (data.length === 0) {
-      return res
-        .status(404)
-        .json({ error: "Draft payroll run not found or already processed." });
+      return res.status(404).json({
+        error: "Payroll run not found or cannot be cancelled.",
+      });
     }
 
     res.status(200).json({ message: "Payroll run cancelled successfully." });
@@ -700,44 +852,466 @@ export const cancelPayrollRun = async (req, res) => {
   }
 };
 
-export const getP9PayrollYears = async (req, res) => {
-  try {
-    const { companyId } = req.params;
+export const getPayrollYears = async (req, res) => {
+  const { companyId } = req.params;
 
-    // Fetch all payroll runs for the company, regardless of status
+  try {
     const { data, error } = await supabase
       .from("payroll_runs")
       .select("payroll_year")
-      .eq("company_id", companyId);
+      .eq("company_id", companyId)
+      .order("payroll_year", { ascending: false });
 
-    if (error) {
-      console.error("Error fetching P9 payroll years:", error);
-      return res
-        .status(500)
-        .json({ success: false, message: "Failed to fetch P9 payroll years." });
-    }
+    if (error) throw new Error("Failed to fetch payroll years.");
 
-    // Check if data is null or empty
-    if (!data || data.length === 0) {
-      return res
-        .status(200)
-        .json({ success: true, message: "No payroll years found.", data: [] });
-    }
-
-    // Extract and return only the unique years
-    const uniqueYears = [
-      ...new Set(data.map((item) => item.payroll_year)),
-    ].sort();
+    const uniqueYears = [...new Set(data.map((item) => item.payroll_year))];
 
     res.status(200).json({
       success: true,
-      message: "P9 payroll years fetched successfully.",
       data: uniqueYears,
     });
   } catch (err) {
-    console.error("Unexpected error in getP9PayrollYears:", err);
-    res
-      .status(500)
-      .json({ success: false, message: "An unexpected error occurred." });
+    console.error("Error fetching payroll years:", err);
+    res.status(500).json({
+      success: false,
+      message: "Failed to fetch payroll years.",
+    });
+  }
+};
+
+// Function to initialize reviews when payroll moves to UNDER_REVIEW
+export const initializePayrollReviews = async (payrollRunId, companyId) => {
+  try {
+    // 1. Get all active reviewers for the company ordered by level
+    const { data: reviewers, error: revError } = await supabase
+      .from("company_reviewers")
+      .select("id, reviewer_level")
+      .eq("company_id", companyId)
+      .order("reviewer_level", { ascending: true });
+
+    if (revError) throw revError;
+    if (!reviewers || reviewers.length === 0) {
+      console.log("No reviewers configured for company:", companyId);
+      return;
+    }
+
+    // 2. Get all newly created payroll details
+    const { data: details, error: detError } = await supabase
+      .from("payroll_details")
+      .select("id")
+      .eq("payroll_run_id", payrollRunId);
+
+    if (detError) throw detError;
+    if (!details || details.length === 0) return;
+
+    // 3. Prepare review entries (Cross-join: Every reviewer reviews every employee)
+    const reviewEntries = [];
+    details.forEach((detail) => {
+      reviewers.forEach((reviewer) => {
+        reviewEntries.push({
+          payroll_detail_id: detail.id,
+          company_reviewer_id: reviewer.id,
+          status: "PENDING",
+          //created_at: new Date().toISOString()
+        });
+      });
+    });
+
+    // 4. Batch insert
+    const { error: insertError } = await supabase
+      .from("payroll_reviews")
+      .insert(reviewEntries);
+
+    if (insertError) throw insertError;
+  } catch (error) {
+    console.error("Critical: Failed to initialize payroll reviews:", error);
+  }
+};
+
+// Get summary of review progress for a payroll run
+// Get summary of review progress for a payroll run
+export const getPayrollReviewStatus = async (req, res) => {
+  const { runId, companyId } = req.params;
+
+  try {
+    // Get payroll run info
+    const { data: payrollRun, error: payrollError } = await supabase
+      .from("payroll_runs")
+      .select("payroll_month, payroll_year, payroll_number, status")
+      .eq("id", runId)
+      .eq("company_id", companyId)
+      .single();
+
+    if (payrollError) throw payrollError;
+
+    // Get all company reviewers with their details from company_users
+    const { data: companyReviewers, error: reviewersError } = await supabase
+      .from("company_reviewers")
+      .select(
+        `
+        id,
+        reviewer_level,
+        company_user_id,
+        company_users!inner (
+          full_name,
+          email
+        )
+      `,
+      )
+      .eq("company_id", companyId)
+      .order("reviewer_level", { ascending: true });
+
+    if (reviewersError) throw reviewersError;
+
+    // If no reviewers found, return empty steps
+    if (!companyReviewers || companyReviewers.length === 0) {
+      return res.json({
+        payroll: payrollRun,
+        steps: [],
+      });
+    }
+
+    // Get all payroll details for this run to know total items
+    const { data: payrollDetails, error: detailsError } = await supabase
+      .from("payroll_details")
+      .select("id")
+      .eq("payroll_run_id", runId);
+
+    if (detailsError) throw detailsError;
+
+    const payrollDetailIds = payrollDetails.map((d) => d.id);
+    const totalItems = payrollDetailIds.length;
+
+    // Get all reviews for this run
+    const { data: reviews, error: reviewsError } = await supabase
+      .from("payroll_reviews")
+      .select(
+        `
+        status,
+        company_reviewer_id
+      `,
+      )
+      .in("payroll_detail_id", payrollDetailIds);
+
+    if (reviewsError) throw reviewsError;
+
+    // Create a map of review counts by reviewer
+    const reviewStats = reviews.reduce((acc, review) => {
+      if (!acc[review.company_reviewer_id]) {
+        acc[review.company_reviewer_id] = {
+          approved: 0,
+          rejected: 0,
+        };
+      }
+
+      if (review.status === "APPROVED") {
+        acc[review.company_reviewer_id].approved++;
+      } else if (review.status === "REJECTED") {
+        acc[review.company_reviewer_id].rejected++;
+      }
+
+      return acc;
+    }, {});
+
+    // Build steps for all reviewers with actual names
+    const steps = companyReviewers.map((reviewer) => {
+      const stats = reviewStats[reviewer.id] || { approved: 0, rejected: 0 };
+
+      // Use full_name from company_users, fallback to email or level
+      const reviewerName =
+        reviewer.company_users?.full_name ||
+        reviewer.company_users?.email?.split("@")[0] ||
+        `Reviewer Level ${reviewer.reviewer_level}`;
+
+      return {
+        reviewer_id: reviewer.id,
+        reviewer_name: reviewerName,
+        reviewer_email: reviewer.company_users?.email || null,
+        reviewer_level: reviewer.reviewer_level,
+        total_items: totalItems,
+        approved_items: stats.approved,
+        rejected_items: stats.rejected,
+        pending_items: totalItems - stats.approved - stats.rejected,
+        completion_percentage:
+          totalItems > 0 ? Math.round((stats.approved / totalItems) * 100) : 0,
+      };
+    });
+
+    res.json({
+      payroll: payrollRun,
+      steps: steps,
+    });
+  } catch (error) {
+    console.error("Error fetching review status:", error);
+    res.status(500).json({ error: "Failed to fetch review status" });
+  }
+};
+
+export const updateItemReviewStatus = async (req, res) => {
+  const { reviewId } = req.params;
+  const { status } = req.body; // 'APPROVED', 'REJECTED', or 'PENDING'
+
+  try {
+    const { data, error } = await supabase
+      .from("payroll_reviews")
+      .update({
+        status,
+        reviewed_at: status === "PENDING" ? null : new Date().toISOString(),
+      })
+      .eq("id", reviewId)
+      .select();
+
+    if (error) throw error;
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: "Update failed" });
+  }
+};
+
+// Get single payroll run with summary
+export const getPayrollRun = async (req, res) => {
+  const { runId } = req.params;
+  const { companyId } = req.params;
+
+  try {
+    const { data, error } = await supabase
+      .from("payroll_runs")
+      .select("*, payroll_details(*)")
+      .eq("id", runId)
+      .single();
+
+      if (error) throw error;
+    if (!data) {
+      return res.status(404).json({ error: "Payroll run not found." });
+    }
+
+      const details = data.payroll_details || [];
+      const totals = {
+        count: details.length,
+        total_gross: details.reduce(
+          (acc, curr) => acc + (parseFloat(curr.gross_pay) || 0),
+          0,
+        ),
+        total_net: details.reduce(
+          (acc, curr) => acc + (parseFloat(curr.net_pay) || 0),
+          0,
+        ),
+        total_paye: details.reduce(
+          (acc, curr) => acc + (parseFloat(curr.paye_tax) || 0),
+          0,
+        ),
+        total_nssf: details.reduce(
+          (acc, curr) => acc + (parseFloat(curr.nssf_deduction) || 0),
+          0,
+        ),
+        total_shif: details.reduce(
+          (acc, curr) => acc + (parseFloat(curr.shif_deduction) || 0),
+          0,
+        ),
+        total_helb: details.reduce(
+          (acc, curr) => acc + (parseFloat(curr.helb_deduction) || 0),
+          0,
+        ),
+        total_housing_levy: details.reduce(
+          (acc, curr) => acc + (parseFloat(curr.housing_levy_deduction) || 0),
+          0,
+        ),
+      };
+
+    
+    // Get employee count
+    const { count } = await supabase
+      .from("payroll_details")
+      .select("*", { count: "exact", head: true })
+      .eq("payroll_run_id", runId);
+
+    res.status(200).json({
+      ...data,
+      employee_count: details.length,
+      calculated_totals: totals 
+    });
+  } catch (error) {
+    console.error("Get payroll run error:", error);
+    res.status(500).json({ error: "Failed to fetch payroll run." });
+  }
+};
+
+// Update payroll status with validation
+export const updatePayrollStatus = async (req, res) => {
+  const { runId } = req.params;
+  const { status } = req.body;
+  const userId = req.userId;
+  const currentStatus = req.payrollStatus;
+
+  // Define valid status transitions
+  const validTransitions = {
+    DRAFT: ["PREPARED", "CANCELLED"],
+    PREPARED: ["UNDER_REVIEW", "DRAFT", "CANCELLED"],
+    UNDER_REVIEW: ["APPROVED", "REJECTED", "DRAFT"],
+    APPROVED: ["LOCKED", "PAID", "DRAFT"],
+    LOCKED: ["PAID", "UNLOCKED"],
+    UNLOCKED: ["DRAFT", "LOCKED"],
+    PAID: ["COMPLETED"],
+    COMPLETED: [],
+    CANCELLED: ["DRAFT"],
+    REJECTED: ["DRAFT"],
+  };
+
+  // Check if transition is valid
+  if (!validTransitions[currentStatus]?.includes(status)) {
+    return res.status(400).json({
+      error: `Cannot transition from ${currentStatus} to ${status}.`,
+    });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("payroll_runs")
+      .update({
+        status,
+        updated_at: new Date().toISOString(),
+        ...(status === "LOCKED" && {
+          locked_at: new Date().toISOString(),
+          locked_by: userId,
+        }),
+        ...(status === "UNLOCKED" && { locked_at: null, locked_by: null }),
+        ...(status === "PAID" && {
+          paid_at: new Date().toISOString(),
+          paid_by: userId,
+        }),
+      })
+      .eq("id", runId)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    // Log the status change
+    await supabase.from("audit_logs").insert({
+      entity_type: "payroll_run",
+      entity_id: runId,
+      action: "UPDATE",
+      performed_by: userId,
+      new_data: { status, previous_status: currentStatus },
+      created_at: new Date().toISOString(),
+    });
+
+    res.status(200).json(data);
+  } catch (error) {
+    console.error("Update payroll status error:", error);
+    res.status(500).json({ error: "Failed to update payroll status." });
+  }
+};
+
+// Lock payroll run
+export const lockPayrollRun = async (req, res) => {
+  req.body.status = "LOCKED";
+  return updatePayrollStatus(req, res);
+};
+
+// Unlock payroll run
+export const unlockPayrollRun = async (req, res) => {
+  req.body.status = "UNLOCKED";
+  return updatePayrollStatus(req, res);
+};
+
+// Mark as paid
+export const markAsPaid = async (req, res) => {
+  req.body.status = "PAID";
+  return updatePayrollStatus(req, res);
+};
+
+// Get payroll summary for dashboard
+export const getPayrollSummary = async (req, res) => {
+  const { companyId } = req.params;
+
+  try {
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth();
+
+    // Get current month payroll
+    const { data: currentPayroll } = await supabase
+      .from("payroll_runs")
+      .select(
+        `
+        id,
+        status,
+        total_gross_pay,
+        total_net_pay,
+        payroll_month,
+        payroll_year
+      `,
+      )
+      .eq("company_id", companyId)
+      .eq("payroll_month", monthNames[currentMonth])
+      .eq("payroll_year", currentYear)
+      .maybeSingle();
+
+    // Get pending approvals
+    const { count: pendingCount } = await supabase
+      .from("payroll_runs")
+      .select("*", { count: "exact", head: true })
+      .eq("company_id", companyId)
+      .in("status", ["PREPARED", "UNDER_REVIEW"]);
+
+    // Get yearly totals
+    const { data: yearlyTotals } = await supabase
+      .from("payroll_runs")
+      .select("total_gross_pay, total_net_pay, status")
+      .eq("company_id", companyId)
+      .eq("payroll_year", currentYear)
+      .in("status", ["PAID", "COMPLETED"]);
+
+    const yearlyGross =
+      yearlyTotals?.reduce((sum, run) => sum + (run.total_gross_pay || 0), 0) ||
+      0;
+    const yearlyNet =
+      yearlyTotals?.reduce((sum, run) => sum + (run.total_net_pay || 0), 0) ||
+      0;
+
+    res.status(200).json({
+      current_month: {
+        exists: !!currentPayroll,
+        status: currentPayroll?.status || null,
+        total_gross: currentPayroll?.total_gross_pay || 0,
+        total_net: currentPayroll?.total_net_pay || 0,
+      },
+      pending_approvals: pendingCount || 0,
+      yearly_total_gross: yearlyGross,
+      yearly_total_net: yearlyNet,
+    });
+  } catch (error) {
+    console.error("Get payroll summary error:", error);
+    res.status(500).json({ error: "Failed to fetch payroll summary." });
+  }
+};
+
+// Delete payroll run (ADMIN only)
+export const deletePayrollRun = async (req, res) => {
+  const { runId } = req.params;
+
+  // Only allow deletion of DRAFT or CANCELLED runs
+  if (!["DRAFT", "CANCELLED"].includes(req.payrollStatus)) {
+    return res.status(400).json({
+      error: `Cannot delete payroll run with status: ${req.payrollStatus}`,
+    });
+  }
+
+  try {
+    // Delete payroll details first (cascade should handle this but being explicit)
+    await supabase.from("payroll_details").delete().eq("payroll_run_id", runId);
+
+    // Delete the payroll run
+    const { error } = await supabase
+      .from("payroll_runs")
+      .delete()
+      .eq("id", runId);
+
+    if (error) throw error;
+
+    res.status(200).json({ message: "Payroll run deleted successfully." });
+  } catch (error) {
+    console.error("Delete payroll run error:", error);
+    res.status(500).json({ error: "Failed to delete payroll run." });
   }
 };

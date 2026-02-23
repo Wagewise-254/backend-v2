@@ -1,20 +1,61 @@
-// backend/routes/companyRoutes.js
 import express from "express";
-import { getCompanies, addCompany, updateCompany, transferCompany} from '../controllers/companyController.js'
-import verifyToken from '../middleware/auth.js'
+import supabase from "../libs/supabaseClient.js";
+import verifyToken from "../middleware/verifyToken.js";
+import {
+  createCompany,
+  getCompanyDetails,
+  updateCompanyDetails,
+  getCompanySettingsSummary,
+  manageDepartments,
+  manageSubDepartments,
+  manageJobTitles,
+} from "../controllers/companyController.js";
 import multer from "multer";
 
-// Configure multer for file uploads
 const upload = multer({ storage: multer.memoryStorage() });
-
 const router = express.Router();
 
-// All company routes will be protected by the verifyToken middleware
-router.put("/:companyId/transfer", verifyToken, transferCompany);
-router.put('/:id', verifyToken, upload.single('logo'), updateCompany);
-router.get('/', verifyToken, getCompanies);
-router.post('/', verifyToken, upload.single('logo'), addCompany);
+//create company
+router.post("/", verifyToken, upload.single("logo"), createCompany);
 
+router.get('/:companyId/settings', verifyToken, getCompanySettingsSummary);
+router.get('/:companyId', verifyToken, getCompanyDetails);
+router.patch('/:companyId', verifyToken, upload.single('logo'), updateCompanyDetails);
 
+// Departments
+router.get("/:companyId/departments", verifyToken, manageDepartments.list);
+router.post("/departments", verifyToken, manageDepartments.create);
+router.patch("/departments/:id", verifyToken, manageDepartments.update)
+router.delete("/departments/:id", verifyToken, manageDepartments.delete);
 
+// Sub-Departments
+router.get(
+  "/:companyId/sub-departments",
+  verifyToken,
+  manageSubDepartments.list,
+);
+// routes
+router.get(
+  "/departments/:departmentId/sub-departments",
+  verifyToken,
+  async (req, res) => {
+    const { data, error } = await supabase
+      .from("sub_departments")
+      .select("*")
+      .eq("department_id", req.params.departmentId);
+
+    if (error) return res.status(400).json(error);
+    res.json(data || []);
+  },
+);
+
+router.post("/sub-departments", verifyToken, manageSubDepartments.create);
+router.patch("/sub-departments/:id", verifyToken, manageSubDepartments.update);
+router.delete("/sub-departments/:id", verifyToken, manageSubDepartments.delete);
+
+// Job Titles
+router.get("/:companyId/job-titles", verifyToken, manageJobTitles.list);
+router.post("/job-titles", verifyToken, manageJobTitles.create);
+router.patch("/job-titles/:id", verifyToken, manageJobTitles.update); 
+router.delete("/job-titles/:id", verifyToken, manageJobTitles.delete);
 export default router;

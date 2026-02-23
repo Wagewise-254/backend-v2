@@ -6,7 +6,7 @@ import {
   updateAllowanceType,
   deleteAllowanceType
 } from '../controllers/allowanceTypeController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
 
 const router = express.Router();
 

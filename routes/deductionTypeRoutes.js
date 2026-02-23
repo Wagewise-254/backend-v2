@@ -6,7 +6,7 @@ import {
   updateDeductionType,
   deleteDeductionType
 } from '../controllers/deductionTypeController.js';
-import verifyToken from '../middleware/auth.js';
+import verifyToken from '../middleware/verifyToken.js';
 
 const router = express.Router();
 
