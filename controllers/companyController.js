@@ -186,7 +186,7 @@ export const createCompany = async (req, res) => {
       if (reviewerError) throw reviewerError;
     }
 
-    res.status(201).json(data);
+    res.status(201).json(company);
   } catch (error) {
     console.error("Create company error:", error);
     res.status(500).json({ error: error.message });
