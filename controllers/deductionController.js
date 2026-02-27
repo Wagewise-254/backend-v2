@@ -1,24 +1,130 @@
-import supabase from '../libs/supabaseClient.js';
+import supabase from "../libs/supabaseClient.js";
 import ExcelJS from "exceljs";
 import pkg from "xlsx";
+import { authorize } from "../utils/authorize.js";
 const { utils, read, SSF } = pkg;
 
 // -------------------- Helper Functions -------------------- //
-// Helper function to check for company ownership
-const checkCompanyOwnership = async (companyId, userId) => {
-  const { data: company, error } = await supabase
+// Helper function to check for company ownershi
+export const checkCompanyAccess = async (companyId, userId, module, rule) => {
+  // 1️ Get workspace_id of the company
+  const { data: company, error: companyError } = await supabase
     .from("companies")
-    .select("id")
+    .select("workspace_id")
     .eq("id", companyId)
+    .single();
+
+  if (companyError || !company) return false;
+
+  // 2️ Check if user belongs to that workspace
+  const { data: workspaceUser, error: workspaceError } = await supabase
+    .from("workspace_users")
+    .select("id")
+    .eq("workspace_id", company.workspace_id)
     .eq("user_id", userId)
     .single();
 
-  if (error || !company) {
-    return false;
-  }
+  if (workspaceError || !workspaceUser) return false;
+
+  // 3️ Check user belongs to this company
+  const { data: companyUser } = await supabase
+    .from("company_users")
+    .select("role")
+    .eq("company_id", companyId)
+    .eq("user_id", userId)
+    .maybeSingle();
+
+  if (!companyUser) return false;
+
+  const auth = await authorize(userId, company.workspace_id, module, rule);
+
+  if (!auth.allowed) return false;
+
   return true;
 };
 
+// Helper function to parse Excel dates and various date formats (same as allowances version)
+function parseExcelDate(dateValue) {
+  if (!dateValue && dateValue !== 0) return null;
+  
+  // If it's an Excel serial number (number)
+  if (typeof dateValue === 'number') {
+    try {
+      // Excel dates start from 1900-01-01
+      // Excel incorrectly treats 1900 as a leap year, so we need to adjust
+      const excelEpoch = new Date(1900, 0, 1);
+      const days = dateValue - 1; // Subtract 1 because Excel starts at 1
+      
+      // Adjust for Excel's leap year bug (day 60 is 1900-02-29, which doesn't exist)
+      const adjustedDays = days > 59 ? days - 1 : days;
+      
+      const result = new Date(excelEpoch.getTime() + adjustedDays * 24 * 60 * 60 * 1000);
+      
+      // Check if date is valid
+      if (isNaN(result.getTime())) {
+        return null;
+      }
+      
+      // Return in YYYY-MM-DD format
+      return result.toISOString().split('T')[0];
+    } catch (e) {
+      console.error("Error parsing Excel date:", e);
+      return null;
+    }
+  }
+  
+  // If it's a string
+  if (typeof dateValue === 'string') {
+    const str = dateValue.trim();
+    
+    // Check for YYYY-MM-DD format
+    const yyyyMmDdRegex = /^\d{4}-\d{2}-\d{2}$/;
+    if (yyyyMmDdRegex.test(str)) {
+      return str;
+    }
+    
+    // Check for DD/MM/YYYY or MM/DD/YYYY
+    const slashRegex = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/;
+    const slashMatch = str.match(slashRegex);
+    if (slashMatch) {
+      // Assume DD/MM/YYYY (common in many regions)
+      const day = parseInt(slashMatch[1], 10);
+      const month = parseInt(slashMatch[2], 10);
+      const year = parseInt(slashMatch[3], 10);
+      
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        const date = new Date(year, month - 1, day);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString().split('T')[0];
+        }
+      }
+    }
+    
+    // Check for DD-MM-YYYY
+    const dashRegex = /^(\d{1,2})-(\d{1,2})-(\d{4})$/;
+    const dashMatch = str.match(dashRegex);
+    if (dashMatch) {
+      const day = parseInt(dashMatch[1], 10);
+      const month = parseInt(dashMatch[2], 10);
+      const year = parseInt(dashMatch[3], 10);
+      
+      if (day >= 1 && day <= 31 && month >= 1 && month <= 12) {
+        const date = new Date(year, month - 1, day);
+        if (!isNaN(date.getTime())) {
+          return date.toISOString().split('T')[0];
+        }
+      }
+    }
+    
+    // Try native Date parsing as last resort
+    const date = new Date(str);
+    if (!isNaN(date.getTime())) {
+      return date.toISOString().split('T')[0];
+    }
+  }
+  
+  return null;
+}
 // Parse and validate date string (must be YYYY-MM-DD)
 function parseDate(dateStr, row, fieldName, errors) {
   if (!dateStr) return null;
@@ -39,7 +145,7 @@ function parseDate(dateStr, row, fieldName, errors) {
     const regex = /^\d{4}-\d{2}-\d{2}$/; // YYYY-MM-DD
     if (!regex.test(dateStr)) {
       errors.push(
-        `Row ${row}: Invalid date format for ${fieldName}. Use YYYY-MM-DD.`
+        `Row ${row}: Invalid date format for ${fieldName}. Use YYYY-MM-DD.`,
       );
       return null;
     }
@@ -55,39 +161,65 @@ function parseDate(dateStr, row, fieldName, errors) {
 export const assignDeduction = async (req, res) => {
   const { companyId } = req.params;
   const userId = req.userId;
-  const { 
-    deduction_type_id, employee_id, department_id, value, 
-    calculation_type, is_recurring = true, start_month, start_year, 
-    end_month, end_year 
-  } = req.body
+  const {
+    deduction_type_id,
+    applies_to,
+    employee_id,
+    department_id,
+    sub_department_id,
+    job_title_id,
+    value,
+    calculation_type,
+    is_recurring = true,
+    start_date,
+    number_of_months,
+    metadata = {},
+  } = req.body;
+
+  // 1. Auto-calculate end_date if duration is provided
+  let end_date = null;
+  if (!is_recurring && number_of_months && start_date) {
+    const start = new Date(start_date);
+    start.setMonth(start.getMonth() + parseInt(number_of_months));
+    end_date = start.toISOString().split('T')[0];
+  }
+
+  const payload = {
+    company_id: companyId,
+    deduction_type_id,
+    applies_to,
+    value,
+    calculation_type,
+    is_recurring,
+    start_date,
+    number_of_months,
+    end_date,
+    metadata,
+    // Targeting Logic: Nullify irrelevant IDs based on applies_to
+    employee_id: applies_to === 'INDIVIDUAL' ? employee_id : null,
+    department_id: applies_to === 'DEPARTMENT' ? department_id : null,
+    sub_department_id: applies_to === 'SUB_DEPARTMENT' ? sub_department_id : null,
+    job_title_id: applies_to === 'JOB_TITLE' ? job_title_id : null,
+  };
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_write",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to assign deduction for this company.' });
+      return res.status(403).json({
+        error: "Unauthorized to assign deduction.",
+      });
     }
 
-    const { data, error } = await supabase
-      .from('deductions')
-       .insert([{ 
-        company_id: companyId, 
-        deduction_type_id, 
-        employee_id, 
-        department_id, 
-        value, 
-        calculation_type, 
-        is_recurring, 
-        start_month, 
-        start_year, 
-        end_month, 
-        end_year 
-      }])
-      .select()
-      .single();
+    const { data, error } = await supabase.from("deductions").insert([payload]).select().single();
     if (error) throw error;
     res.status(201).json(data);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to assign deduction' });
+    res.status(500).json({ error: "Failed to assign deduction" });
   }
 };
 
@@ -97,19 +229,34 @@ export const getDeductions = async (req, res) => {
   const userId = req.userId;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_read",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to fetch deductions for this company.' });
+      return res.status(403).json({
+        error: "Unauthorized to view deductions.",
+      });
     }
 
     const { data, error } = await supabase
-      .from('deductions')
-      .select('*, deduction_types(name, is_tax_deductible), employees(first_name, last_name), departments(name)')
-      .eq('company_id', companyId);
+      .from("deductions")
+      .select(`
+        *, 
+        deduction_types(name, code, is_pre_tax), 
+        employees(first_name, last_name, employee_number), 
+        departments(name),
+        sub_departments(name),
+        job_titles(title)
+      `)
+      .eq("company_id", companyId);
+      
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch deductions' });
+    res.status(500).json({ error: "Failed to fetch deductions" });
   }
 };
 
@@ -119,20 +266,28 @@ export const getDeductionById = async (req, res) => {
   const userId = req.userId;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_read",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to access this deduction.' });
+      return res.status(403).json({
+        error: "Unauthorized to view deductions.",
+      });
     }
 
-    const { data, error } = await supabase.from('deductions')
-      .select('*')
-      .eq('id', id)
-      .eq('company_id', companyId)
+    const { data, error } = await supabase
+      .from("deductions")
+      .select("*")
+      .eq("id", id)
+      .eq("company_id", companyId)
       .single();
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(404).json({ error: 'Deduction not found' });
+    res.status(404).json({ error: "Deduction not found" });
   }
 };
 
@@ -140,25 +295,55 @@ export const getDeductionById = async (req, res) => {
 export const updateDeduction = async (req, res) => {
   const { companyId, id } = req.params;
   const userId = req.userId;
-  const { value, calculation_type, is_recurring, start_month, start_year, end_month, end_year } = req.body;
+  const {
+    value,
+    calculation_type,
+    is_recurring,
+    start_date,
+    number_of_months,
+    metadata,
+  } = req.body;
+
+  let end_date = null;
+  if (!is_recurring && number_of_months && start_date) {
+    const start = new Date(start_date);
+    start.setMonth(start.getMonth() + parseInt(number_of_months));
+    end_date = start.toISOString().split('T')[0];
+  }
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_write",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to update this deduction.' });
+      return res.status(403).json({
+        error: "Unauthorized to update deduction.",
+      });
     }
 
     const { data, error } = await supabase
-      .from('deductions')
-      .update({ value, calculation_type, is_recurring, start_month, start_year, end_month, end_year })
-      .eq('id', id)
-      .eq('company_id', companyId)
+      .from("deductions")
+      .update({
+        value,
+        calculation_type,
+        is_recurring,
+        start_date,
+        number_of_months,
+        end_date,
+        metadata,
+      })
+      .eq("id", id)
+      .eq("company_id", companyId)
       .select()
       .single();
+
     if (error) throw error;
     res.json(data);
   } catch (err) {
-    res.status(500).json({ error: 'Failed to update deduction' });
+    res.status(500).json({ error: "Failed to update deduction" });
   }
 };
 
@@ -168,19 +353,27 @@ export const removeDeduction = async (req, res) => {
   const userId = req.userId;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_delete",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: 'Unauthorized to remove this deduction.' });
+      return res.status(403).json({
+        error: "Unauthorized to delete deduction.",
+      });
     }
 
-    const { error } = await supabase.from('deductions')
+    const { error } = await supabase
+      .from("deductions")
       .delete()
-      .eq('id', id)
-      .eq('company_id', companyId);
+      .eq("id", id)
+      .eq("company_id", companyId);
     if (error) throw error;
-    res.json({ message: 'Deduction removed' });
+    res.json({ message: "Deduction removed" });
   } catch (err) {
-    res.status(500).json({ error: 'Failed to remove deduction' });
+    res.status(500).json({ error: "Failed to remove deduction" });
   }
 };
 
@@ -188,16 +381,29 @@ export const removeDeduction = async (req, res) => {
 export const bulkDeleteDeductions = async (req, res) => {
   const { companyId } = req.params;
   const { deductionIds } = req.body; // Expecting an array of IDs in the body
-  const userId = req.user.id; 
+  const userId = req.user.id;
 
-  if (!deductionIds || !Array.isArray(deductionIds) || deductionIds.length === 0) {
-    return res.status(400).json({ error: "No deduction IDs provided for deletion." });
+  if (
+    !deductionIds ||
+    !Array.isArray(deductionIds) ||
+    deductionIds.length === 0
+  ) {
+    return res
+      .status(400)
+      .json({ error: "No deduction IDs provided for deletion." });
   }
 
   // 1. Check company ownership - Assuming checkCompanyOwnership is available in this file
-  const isOwner = await checkCompanyOwnership(companyId, userId);
-  if (!isOwner) {
-    return res.status(403).json({ error: "Unauthorized. User is not the owner of this company or company does not exist." });
+  const isAuthorized = await checkCompanyAccess(
+    companyId,
+    userId,
+    "PAYROLL",
+    "can_delete",
+  );
+  if (!isAuthorized) {
+    return res.status(403).json({
+      error: "Unauthorized to delete deduction.",
+    });
   }
 
   try {
@@ -213,10 +419,14 @@ export const bulkDeleteDeductions = async (req, res) => {
       return res.status(500).json({ error: "Failed to delete deductions." });
     }
 
-    res.status(200).json({ message: `${deductionIds.length} deduction(s) deleted successfully.` });
+    res.status(200).json({
+      message: `${deductionIds.length} deduction(s) deleted successfully.`,
+    });
   } catch (error) {
     console.error("Bulk delete deductions general error:", error);
-    res.status(500).json({ error: "An unexpected error occurred during bulk deletion." });
+    res
+      .status(500)
+      .json({ error: "An unexpected error occurred during bulk deletion." });
   }
 };
 
@@ -226,91 +436,308 @@ export const generateDeductionTemplate = async (req, res) => {
   const userId = req.userId;
 
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_read",
+    );
     if (!isAuthorized) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized to generate template for this company." });
+      return res.status(403).json({
+        error: "Unauthorized to view deduction template.",
+      });
     }
 
-    // Fetch required data from the database
-    const { data: employees, error: employeeError } = await supabase
-      .from("employees")
-      .select("employee_number, first_name, last_name")
-      .eq("company_id", companyId);
-    if (employeeError) throw employeeError;
+    // Fetch all required data
+    const [
+      employeesResult,
+      deductionTypesResult,
+      departmentsResult,
+      subDepartmentsResult,
+      jobTitlesResult
+    ] = await Promise.all([
+      supabase.from("employees").select("employee_number, first_name, last_name").eq("company_id", companyId),
+      supabase.from("deduction_types").select("name, code, is_pre_tax").eq("company_id", companyId),
+      supabase.from("departments").select("name").eq("company_id", companyId),
+      supabase.from("sub_departments").select("name").eq("company_id", companyId),
+      supabase.from("job_titles").select("title").eq("company_id", companyId)
+    ]);
 
-    const { data: deductionTypes, error: deductionTypeError } = await supabase
-      .from("deduction_types")
-      .select("name")
-      .eq("company_id", companyId);
-    if (deductionTypeError) throw deductionTypeError;
+    if (employeesResult.error) throw employeesResult.error;
+    if (deductionTypesResult.error) throw deductionTypesResult.error;
+    if (departmentsResult.error) throw departmentsResult.error;
+    if (subDepartmentsResult.error) throw subDepartmentsResult.error;
+    if (jobTitlesResult.error) throw jobTitlesResult.error;
 
-    // Sort employees by employee_number
+    const employees = employeesResult.data || [];
+    const deductionTypes = deductionTypesResult.data || [];
+    const departments = departmentsResult.data || [];
+    const subDepartments = subDepartmentsResult.data || [];
+    const jobTitles = jobTitlesResult.data || [];
+
+    // Sort data for better readability
     employees.sort((a, b) => {
-      const codeA = a.employee_number || "";
-      const codeB = b.employee_number || "";
-      return codeA.localeCompare(codeB, undefined, {
-        numeric: true,
-        sensitivity: "base",
-      });
+      const numA = a.employee_number || "";
+      const numB = b.employee_number || "";
+      return numA.localeCompare(numB, undefined, { numeric: true, sensitivity: "base" });
     });
+
+    deductionTypes.sort((a, b) => a.name.localeCompare(b.name));
+    departments.sort((a, b) => a.name.localeCompare(b.name));
+    subDepartments.sort((a, b) => a.name.localeCompare(b.name));
+    jobTitles.sort((a, b) => a.title.localeCompare(b.title));
 
     const workbook = new ExcelJS.Workbook();
-    const worksheet = workbook.addWorksheet("Deductions");
+
+    // --- MAIN SHEET ---
+    const mainSheet = workbook.addWorksheet("Deductions");
 
     const headers = [
-      { header: "Employee Number", key: "employee_number", width: 20 },
-      { header: "Deduction Name", key: "deduction_name", width: 20 },
+      { header: "Deduction Type Name", key: "type_name", width: 25 },
+      { header: "Applies To", key: "applies_to", width: 20 },
+      { header: "Target Identifier", key: "target", width: 35 },
       { header: "Value", key: "value", width: 15 },
-      { header: "Calculation Type", key: "calculation_type", width: 20 },
-      { header: "Is Recurring (true/false)", key: "is_recurring", width: 25 }, 
-      { header: "Start Month (e.g., January)", key: "start_month", width: 25 }, 
-      { header: "Start Year (e.g., 2024)", key: "start_year", width: 25 }, 
-      { header: "End Month (Optional)", key: "end_month", width: 25 }, 
-      { header: "End Year (Optional)", key: "end_year", width: 25 }, 
+      { header: "Calc Type", key: "calc_type", width: 15 },
+      { header: "Is Recurring", key: "recurring", width: 15 },
+      { header: "Start Date (YYYY-MM-DD)", key: "start", width: 20 },
+      { header: "Months (Optional)", key: "months", width: 15 },
+      { header: "Metadata JSON", key: "metadata", width: 40 },
     ];
 
-    worksheet.columns = headers;
-    worksheet.getRow(1).font = { bold: true };
+    mainSheet.columns = headers;
+    
+    // Style header row
+    const headerRow = mainSheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' }
+    };
 
-     // --- Dropdown Setup ---
-    const monthNames = [
-      "January", "February", "March", "April", "May", "June", 
-      "July", "August", "September", "October", "November", "December"
-    ];
+    // Add sample row with instructions
+    mainSheet.addRow([
+      "NHIF",
+      "INDIVIDUAL",
+      "EMP001",
+      "1700",
+      "FIXED",
+      "TRUE",
+      "2024-01-01",
+      "",
+      '{"notes": "Monthly NHIF deduction"}'
+    ]);
 
-    // Add dropdowns for 'Deduction Name', 'Calculation Type', 'Is Active', and 'Is One-Time'
-    const deductionNames = deductionTypes.map((type) => type.name);
-    const calculationTypes = ["Fixed", "Percentage"];
-    const isTrueFalse = ["true", "false"];
-
-    employees.forEach((employee) => {
-      worksheet.addRow([employee.employee_number]);
-    });
-
-     // Add dropdowns to each cell in the relevant columns (B-I)
-     for (let i = 2; i <= 1000; i++) {
-      // Deduction Name
-      worksheet.getCell(`B${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${deductionNames.join(",")}"`] };
-      // Calculation Type
-      worksheet.getCell(`D${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${calculationTypes.join(",")}"`] };
-      // Is Recurring
-      worksheet.getCell(`E${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${isTrueFalse.join(",")}"`] };
-      // Start Month
-      worksheet.getCell(`F${i}`).dataValidation = { type: "list", allowBlank: false, formulae: [`"${monthNames.join(",")}"`] };
-      // End Month
-      worksheet.getCell(`H${i}`).dataValidation = { type: "list", allowBlank: true, formulae: [`"${monthNames.join(",")}"`] };
-      // Note: Start Year (G) and End Year (I) should remain free text/number fields for flexibility.
+    // Add empty rows for data entry (up to 1000 rows)
+    for (let i = 3; i <= 1000; i++) {
+      mainSheet.addRow([]);
     }
 
+    // --- REFERENCE SHEET ---
+    const refSheet = workbook.addWorksheet("Reference (Read Only)");
+
+    // Style reference sheet header
+    const refHeaderRow = refSheet.getRow(1);
+    refHeaderRow.font = { bold: true };
+    refHeaderRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFE699' }
+    };
+
+    // Add Deduction Types section
+    refSheet.getCell('A1').value = 'DEDUCTION TYPES';
+    refSheet.getCell('A2').value = 'Name';
+    refSheet.getCell('B2').value = 'Code';
+    refSheet.getCell('C2').value = 'Pre-Tax';
+    
+    deductionTypes.forEach((type, index) => {
+      const rowNum = index + 3;
+      refSheet.getCell(`A${rowNum}`).value = type.name;
+      refSheet.getCell(`B${rowNum}`).value = type.code;
+      refSheet.getCell(`C${rowNum}`).value = type.is_pre_tax ? 'Yes' : 'No';
+    });
+
+    // Add Employees section
+    refSheet.getCell('E1').value = 'EMPLOYEES';
+    refSheet.getCell('E2').value = 'Employee Number';
+    refSheet.getCell('F2').value = 'Full Name';
+    
+    employees.forEach((emp, index) => {
+      const rowNum = index + 3;
+      refSheet.getCell(`E${rowNum}`).value = emp.employee_number;
+      refSheet.getCell(`F${rowNum}`).value = `${emp.first_name} ${emp.last_name}`.trim();
+    });
+
+    // Add Departments section
+    refSheet.getCell('H1').value = 'DEPARTMENTS';
+    refSheet.getCell('H2').value = 'Department Name';
+    
+    departments.forEach((dept, index) => {
+      refSheet.getCell(`H${index + 3}`).value = dept.name;
+    });
+
+    // Add Sub-Departments section (starting at column J)
+    refSheet.getCell('J1').value = 'SUB-DEPARTMENTS';
+    refSheet.getCell('J2').value = 'Sub-Department Name';
+    
+    subDepartments.forEach((sub, index) => {
+      refSheet.getCell(`J${index + 3}`).value = sub.name;
+    });
+
+    // Add Job Titles section (starting at column L)
+    refSheet.getCell('L1').value = 'JOB TITLES';
+    refSheet.getCell('L2').value = 'Job Title';
+    
+    jobTitles.forEach((job, index) => {
+      refSheet.getCell(`L${index + 3}`).value = job.title;
+    });
+
+    // Style reference sheet columns
+    refSheet.columns = [
+      { width: 25 }, // A: Deduction Name
+      { width: 15 }, // B: Code
+      { width: 10 }, // C: Pre-Tax
+      { width: 5 },  // D: Spacer
+      { width: 20 }, // E: Employee Number
+      { width: 30 }, // F: Full Name
+      { width: 5 },  // G: Spacer
+      { width: 25 }, // H: Department Name
+      { width: 5 },  // I: Spacer
+      { width: 25 }, // J: Sub-Department Name
+      { width: 5 },  // K: Spacer
+      { width: 25 }, // L: Job Title
+    ];
+
+    // Protect reference sheet
+    refSheet.protect('', {
+      selectLockedCells: true,
+      selectUnlockedCells: true,
+      formatCells: false,
+      formatColumns: false,
+      formatRows: false,
+      insertColumns: false,
+      insertRows: false,
+      deleteColumns: false,
+      deleteRows: false
+    });
+
+    // --- DROPDOWNS ON MAIN SHEET ---
+    
+    // Prepare dropdown lists
+    const typeNames = deductionTypes.map(t => t.name);
+    const appliesToOptions = ["INDIVIDUAL", "COMPANY", "DEPARTMENT", "SUB_DEPARTMENT", "JOB_TITLE"];
+    const employeeList = employees.map(e => e.employee_number);
+    const departmentList = departments.map(d => d.name);
+    const subDepartmentList = subDepartments.map(s => s.name);
+    const jobTitleList = jobTitles.map(j => j.title);
+
+    for (let i = 2; i <= 1000; i++) {
+      // Deduction Type dropdown
+      if (typeNames.length > 0) {
+        mainSheet.getCell(`A${i}`).dataValidation = {
+          type: 'list',
+          allowBlank: false,
+          formulae: [`"${typeNames.join(',')}"`],
+          showErrorMessage: true,
+          errorStyle: 'stop',
+          errorTitle: 'Invalid Deduction Type',
+          error: 'Please select a valid deduction type from the list'
+        };
+      }
+
+      // Applies To dropdown
+      mainSheet.getCell(`B${i}`).dataValidation = {
+        type: 'list',
+        allowBlank: false,
+        formulae: [`"${appliesToOptions.join(',')}"`],
+        showErrorMessage: true,
+        errorStyle: 'stop',
+        errorTitle: 'Invalid Applies To',
+        error: 'Please select INDIVIDUAL, COMPANY, DEPARTMENT, SUB_DEPARTMENT, or JOB_TITLE'
+      };
+
+      // Calculation Type dropdown
+      mainSheet.getCell(`E${i}`).dataValidation = {
+        type: 'list',
+        allowBlank: false,
+        formulae: ['"FIXED,PERCENTAGE"'],
+        showErrorMessage: true,
+        errorStyle: 'stop',
+        errorTitle: 'Invalid Calculation Type',
+        error: 'Please select FIXED or PERCENTAGE'
+      };
+
+      // Is Recurring dropdown
+      mainSheet.getCell(`F${i}`).dataValidation = {
+        type: 'list',
+        allowBlank: false,
+        formulae: ['"TRUE,FALSE"'],
+        showErrorMessage: true,
+        errorStyle: 'stop',
+        errorTitle: 'Invalid Value',
+        error: 'Please select TRUE or FALSE'
+      };
+    }
+
+    // Add conditional formatting to highlight required fields
+    mainSheet.addConditionalFormatting({
+      ref: 'A2:G1000',
+      rules: [
+        {
+          type: 'expression',
+          formulae: ['=AND(A2<>"",B2<>"",C2<>"",D2<>"",E2<>"",F2<>"",G2<>"")'],
+          style: {
+            fill: {
+              type: 'pattern',
+              pattern: 'solid',
+              bgColor: { argb: 'FFC6EFCE' }
+            }
+          }
+        }
+      ]
+    });
+
+    // Add notes sheet
+    const notesSheet = workbook.addWorksheet("Instructions");
+    notesSheet.getCell('A1').value = 'INSTRUCTIONS FOR BULK DEDUCTION IMPORT';
+    notesSheet.getCell('A1').font = { bold: true, size: 14 };
+    
+    notesSheet.getCell('A3').value = '1. Use the "Deductions" sheet to enter your data';
+    notesSheet.getCell('A4').value = '2. Use the "Reference (Read Only)" sheet to see available deduction types, employees, departments, etc.';
+    notesSheet.getCell('A5').value = '3. Column explanations:';
+    notesSheet.getCell('A6').value = '   - Deduction Type Name: Select from dropdown (based on your configured deduction types)';
+    notesSheet.getCell('A7').value = '   - Applies To: Select who this deduction applies to (INDIVIDUAL, COMPANY, DEPARTMENT, SUB_DEPARTMENT, JOB_TITLE)';
+    notesSheet.getCell('A8').value = '   - Target Identifier: Based on Applies To selection:';
+    notesSheet.getCell('A9').value = '     * For INDIVIDUAL: Use Employee Number (see Reference sheet)';
+    notesSheet.getCell('A10').value = '     * For DEPARTMENT: Use Department Name (see Reference sheet)';
+    notesSheet.getCell('A11').value = '     * For SUB_DEPARTMENT: Use Sub-Department Name (see Reference sheet)';
+    notesSheet.getCell('A12').value = '     * For JOB_TITLE: Use Job Title (see Reference sheet)';
+    notesSheet.getCell('A13').value = '     * For COMPANY: Leave blank or enter "COMPANY"';
+    notesSheet.getCell('A14').value = '   - Value: Numeric value for the deduction';
+    notesSheet.getCell('A15').value = '   - Calc Type: FIXED (fixed amount) or PERCENTAGE (percentage of basic salary)';
+    notesSheet.getCell('A16').value = '   - Is Recurring: TRUE (repeats monthly) or FALSE (one-time)';
+    notesSheet.getCell('A17').value = '   - Start Date: Format YYYY-MM-DD (e.g., 2024-01-01)';
+    notesSheet.getCell('A18').value = '   - Months: For non-recurring deductions, number of months (optional)';
+    notesSheet.getCell('A19').value = '   - Metadata: JSON format for additional data (optional)';
+    
+    notesSheet.getCell('A21').value = '4. All fields except Months and Metadata are required';
+    notesSheet.getCell('A22').value = '5. Rows with green background have all required fields filled';
+    
+    // Style notes sheet
+    notesSheet.columns = [{ width: 80 }];
+    for (let i = 3; i <= 22; i++) {
+      notesSheet.getCell(`A${i}`).font = { size: 11 };
+    }
+
+    // Set response headers
     res.setHeader(
       "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader(
       "Content-Disposition",
-      "attachment; filename=Deduction_Import_Template.xlsx"
+      "attachment; filename=Deduction_Import_Template.xlsx",
     );
 
     await workbook.xlsx.write(res);
@@ -326,17 +753,17 @@ export const importDeductions = async (req, res) => {
   const { companyId } = req.params;
   const userId = req.userId;
 
-  const monthNames = [
-    "January", "February", "March", "April", "May", "June", 
-    "July", "August", "September", "October", "November", "December"
-  ];
-
-  const isValidMonth = (month) => monthNames.includes(month);
-
   try {
-    const isAuthorized = await checkCompanyOwnership(companyId, userId);
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "PAYROLL",
+      "can_write",
+    );
     if (!isAuthorized) {
-      return res.status(403).json({ error: "Unauthorized to import deductions." });
+      return res.status(403).json({
+        error: "Unauthorized to import deductions.",
+      });
     }
 
     const file = req.file;
@@ -345,137 +772,246 @@ export const importDeductions = async (req, res) => {
     }
 
     const workbook = read(file.buffer, { type: "buffer" });
-    const sheetName = workbook.SheetNames[0];
-    const worksheet = workbook.Sheets[sheetName];
-    const jsonData = utils.sheet_to_json(worksheet);
+    
+    // Get the main sheet (Deductions)
+    const mainSheetName = workbook.SheetNames.find(name => 
+      name === "Deductions" || name.includes("Deduction")
+    );
+    
+    if (!mainSheetName) {
+      return res.status(400).json({ 
+        error: "Invalid template format. Please use the downloaded template." 
+      });
+    }
 
+    const worksheet = workbook.Sheets[mainSheetName];
+    
+    // Use sheet_to_json with header option to get proper parsing
+    const jsonData = utils.sheet_to_json(worksheet, { 
+      header: 1,
+      defval: '', // Default value for empty cells
+      blankrows: false // Skip completely empty rows
+    });
+
+    // Filter out empty rows and header row
+    const dataRows = jsonData.slice(1).filter(row => 
+      row && row.some(cell => cell !== null && cell !== undefined && cell !== '')
+    );
+
+    if (dataRows.length === 0) {
+      return res.status(400).json({ error: "No data found in the uploaded file." });
+    }
+
+    // Pre-fetch all maps for lookup
+    const [employees, depts, subs, titles, types] = await Promise.all([
+      supabase.from("employees").select("id, employee_number").eq("company_id", companyId),
+      supabase.from("departments").select("id, name").eq("company_id", companyId),
+      supabase.from("sub_departments").select("id, name").eq("company_id", companyId),
+      supabase.from("job_titles").select("id, title").eq("company_id", companyId),
+      supabase.from("deduction_types").select("id, name, code").eq("company_id", companyId)
+    ]);
+
+    // Check for errors
+    if (employees.error || depts.error || subs.error || titles.error || types.error) {
+      throw new Error("Failed to fetch reference data");
+    }
+
+    const empMap = new Map(employees.data.map(e => [e.employee_number, e.id]));
+    const deptMap = new Map(depts.data.map(d => [d.name?.trim(), d.id]));
+    const typeMap = new Map(types.data.map(t => [t.name?.trim(), { id: t.id, code: t.code }]));
+    const subMap = new Map(subs.data.map(s => [s.name?.trim(), s.id]));
+    const titleMap = new Map(titles.data.map(j => [j.title?.trim(), j.id]));
+
+    const toInsert = [];
     const errors = [];
-    const deductionsToUpsert = [];
 
-    // Fetch employee IDs and deduction type IDs for validation
-    const { data: employees, error: employeeError } = await supabase
-      .from("employees")
-      .select("id, employee_number")
-      .eq("company_id", companyId);
-    if (employeeError) throw employeeError;
+    for (const [index, row] of dataRows.entries()) {
+      const rowNumber = index + 2; // Account for header row
+      
+      const typeName = row[0]?.toString().trim();
+      const appliesTo = row[1]?.toString().trim().toUpperCase();
+      const target = row[2]?.toString().trim();
+      const value = row[3];
+      const calculationType = row[4]?.toString().trim().toUpperCase();
+      const isRecurring = row[5]?.toString().trim().toUpperCase();
+      const startDate = row[6]; // Can be string or number (Excel serial)
+      const numberOfMonths = row[7] ? parseInt(row[7].toString().trim()) : null;
+      const metadataStr = row[8]?.toString().trim();
 
-    const employeeMap = new Map(
-      employees.map((emp) => [emp.employee_number, emp.id])
-    );
-
-    const { data: deductionTypes, error: deductionTypeError } = await supabase
-      .from("deduction_types")
-      .select("id, name")
-      .eq("company_id", companyId);
-    if (deductionTypeError) throw deductionTypeError;
-
-    const deductionTypeMap = new Map(
-      deductionTypes.map((type) => [type.name, type.id])
-    );
-
-    for (const [index, row] of jsonData.entries()) {
-     const rowNumber = index + 2;
-      const employeeNumber = row["Employee Number"];
-      const deductionName = row["Deduction Name"];
-      const value = row["Value"];
-      const calculationType = row["Calculation Type"];
-      const isRecurring = row["Is Recurring (true/false)"];
-      const startMonth = row["Start Month (e.g., January)"];
-      const startYear = row["Start Year (e.g., 2024)"];
-      const endMonth = row["End Month (Optional)"] || null; 
-      const endYear = row["End Year (Optional)"] || null; 
-
-      // Validation logic
-      if (
-        !employeeNumber ||
-        !deductionName ||
-        !value ||
-        !calculationType ||
-        !startMonth ||
-        !startYear ||
-        isRecurring === undefined
-      ) {
-        errors.push(`Row ${rowNumber}: Required fields are missing.`);
+      // Skip empty rows
+      if (!typeName && !appliesTo && !target && !value) {
         continue;
       }
 
-      const employeeId = employeeMap.get(String(employeeNumber).trim());
-      if (!employeeId) {
-        errors.push(`Row ${rowNumber}: Invalid Employee Number.`);
+      // Validate required fields
+      const missingFields = [];
+      if (!typeName) missingFields.push("Deduction Type Name");
+      if (!appliesTo) missingFields.push("Applies To");
+      if (appliesTo !== "COMPANY" && !target) missingFields.push("Target Identifier");
+      if (!value) missingFields.push("Value");
+      if (!calculationType) missingFields.push("Calc Type");
+      if (!isRecurring) missingFields.push("Is Recurring");
+      if (!startDate && startDate !== 0) missingFields.push("Start Date");
+
+      if (missingFields.length > 0) {
+        errors.push(`Row ${rowNumber}: Missing required fields: ${missingFields.join(', ')}`);
+        continue;
       }
 
-      const deductionTypeId = deductionTypeMap.get(
-        String(deductionName).trim()
-      );
-      if (!deductionTypeId) {
-        errors.push(`Row ${rowNumber}: Invalid Deduction Name.`);
+      // Validate applies_to
+      const validAppliesTo = ["INDIVIDUAL", "COMPANY", "DEPARTMENT", "SUB_DEPARTMENT", "JOB_TITLE"];
+      if (!validAppliesTo.includes(appliesTo)) {
+        errors.push(`Row ${rowNumber}: Invalid Applies To value "${appliesTo}". Must be one of: ${validAppliesTo.join(', ')}`);
+        continue;
       }
 
-      if (!["Fixed", "Percentage"].includes(String(calculationType).trim())) {
-        errors.push(
-          `Row ${rowNumber}: Invalid Calculation Type. Must be 'Fixed' or 'Percentage'.`
-        );
+      // Get type info
+      const typeInfo = typeMap.get(typeName);
+      if (!typeInfo) {
+        errors.push(`Row ${rowNumber}: Deduction type "${typeName}" not found.`);
+        continue;
       }
 
-      // New Month/Year Validation
-      if (!isValidMonth(String(startMonth).trim())) {
-        errors.push(`Row ${rowNumber}: Invalid Start Month.`);
-      }
-      if (isNaN(parseInt(startYear)) || parseInt(startYear) < 1900) {
-        errors.push(`Row ${rowNumber}: Invalid Start Year.`);
-      }
-      
-      if (endMonth && !isValidMonth(String(endMonth).trim())) {
-        errors.push(`Row ${rowNumber}: Invalid End Month.`);
-      }
-      if (endYear && (isNaN(parseInt(endYear)) || parseInt(endYear) < 1900)) {
-        errors.push(`Row ${rowNumber}: Invalid End Year.`);
+      // Get target ID based on applies_to
+      let targetId = null;
+      if (appliesTo === "INDIVIDUAL") {
+        targetId = empMap.get(target);
+        if (!targetId) {
+          errors.push(`Row ${rowNumber}: Employee "${target}" not found.`);
+          continue;
+        }
+      } else if (appliesTo === "DEPARTMENT") {
+        targetId = deptMap.get(target);
+        if (!targetId) {
+          errors.push(`Row ${rowNumber}: Department "${target}" not found.`);
+          continue;
+        }
+      } else if (appliesTo === "SUB_DEPARTMENT") {
+        targetId = subMap.get(target);
+        if (!targetId) {
+          errors.push(`Row ${rowNumber}: Sub-department "${target}" not found.`);
+          continue;
+        }
+      } else if (appliesTo === "JOB_TITLE") {
+        targetId = titleMap.get(target);
+        if (!targetId) {
+          errors.push(`Row ${rowNumber}: Job title "${target}" not found.`);
+          continue;
+        }
       }
 
-
-
-      if (errors.length === 0) {
-        deductionsToUpsert.push({
-          company_id: companyId,
-          deduction_type_id: deductionTypeId,
-          employee_id: employeeId,
-          value: parseFloat(value),
-          calculation_type: String(calculationType).trim(),
-           is_recurring: String(isRecurring).trim().toLowerCase() === "true",
-          start_month: String(startMonth).trim(),
-          start_year: parseInt(startYear),
-          end_month: endMonth ? String(endMonth).trim() : null,
-          end_year: endYear ? parseInt(endYear) : null,
-        });
+      // Validate calculation type
+      if (!["FIXED", "PERCENTAGE"].includes(calculationType)) {
+        errors.push(`Row ${rowNumber}: Calculation type must be FIXED or PERCENTAGE, got "${calculationType}"`);
+        continue;
       }
+
+      // Validate is_recurring
+      let recurringBool;
+      const recurringStr = String(isRecurring).toUpperCase();
+      if (recurringStr === "TRUE" || recurringStr === "YES" || recurringStr === "1" || recurringStr === "TRUE") {
+        recurringBool = true;
+      } else if (recurringStr === "FALSE" || recurringStr === "NO" || recurringStr === "0" || recurringStr === "FALSE") {
+        recurringBool = false;
+      } else {
+        errors.push(`Row ${rowNumber}: Is Recurring must be TRUE or FALSE, got "${isRecurring}"`);
+        continue;
+      }
+
+      // Validate value is a number
+      const numericValue = parseFloat(value);
+      if (isNaN(numericValue) || numericValue < 0) {
+        errors.push(`Row ${rowNumber}: Value must be a positive number, got "${value}"`);
+        continue;
+      }
+
+      // Parse date (handle both string and Excel serial number)
+      let parsedDate = null;
+      try {
+        parsedDate = parseExcelDate(startDate);
+        if (!parsedDate) {
+          errors.push(`Row ${rowNumber}: Could not parse date "${startDate}". Please use YYYY-MM-DD format or a valid Excel date.`);
+          continue;
+        }
+      } catch (dateError) {
+        errors.push(`Row ${rowNumber}: Invalid date format for Start Date. Got "${startDate}"`);
+        continue;
+      }
+
+      // Validate months if provided
+      if (numberOfMonths !== null && (isNaN(numberOfMonths) || numberOfMonths < 1)) {
+        errors.push(`Row ${rowNumber}: Months must be a positive number, got "${numberOfMonths}"`);
+        continue;
+      }
+
+      // Parse metadata if provided
+      let metadata = {};
+      if (metadataStr) {
+        try {
+          metadata = JSON.parse(metadataStr);
+        } catch (e) {
+          errors.push(`Row ${rowNumber}: Invalid JSON in Metadata field: "${metadataStr}"`);
+          continue;
+        }
+      }
+
+      // Calculate end_date if applicable
+      let endDate = null;
+      if (!recurringBool && numberOfMonths && parsedDate) {
+        const start = new Date(parsedDate);
+        start.setMonth(start.getMonth() + numberOfMonths);
+        endDate = start.toISOString().split('T')[0];
+      }
+
+      // Prepare the insert object
+      toInsert.push({
+        company_id: companyId,
+        deduction_type_id: typeInfo.id,
+        applies_to: appliesTo,
+        employee_id: appliesTo === "INDIVIDUAL" ? targetId : null,
+        department_id: appliesTo === "DEPARTMENT" ? targetId : null,
+        sub_department_id: appliesTo === "SUB_DEPARTMENT" ? targetId : null,
+        job_title_id: appliesTo === "JOB_TITLE" ? targetId : null,
+        value: numericValue,
+        calculation_type: calculationType,
+        is_recurring: recurringBool,
+        start_date: parsedDate,
+        number_of_months: numberOfMonths,
+        end_date: endDate,
+        metadata: metadata
+      });
     }
 
     if (errors.length > 0) {
       return res.status(400).json({
         error: "Import failed due to validation errors.",
-        details: errors,
+        details: errors
       });
     }
 
-    // Use upsert to handle new entries and updates for existing ones.
+    if (toInsert.length === 0) {
+      return res.status(400).json({ error: "No valid data to import." });
+    }
+
+    // Insert the deductions (use insert instead of upsert since we don't have a unique constraint)
     const { data, error } = await supabase
       .from("deductions")
-      .upsert(deductionsToUpsert, {
-        onConflict: "employee_id, deduction_type_id, company_id",
-      })
+      .insert(toInsert)
       .select();
 
     if (error) {
-      console.error("Bulk upsert deductions error:", error);
-      return res.status(500).json({ error: "Failed to import deductions." });
+      console.error("Insert error:", error);
+      throw error;
     }
 
     res.status(200).json({
-      message: "Deductions imported successfully!",
+      message: `Successfully imported ${data.length} deduction(s).`,
       count: data.length,
     });
+
   } catch (error) {
     console.error("Import deductions controller error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message || "Failed to import deductions" });
   }
 };
+

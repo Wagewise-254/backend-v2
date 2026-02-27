@@ -8,6 +8,75 @@ import fetch from "node-fetch";
 import fs from "fs";
 import path from "path";
 
+// Helper function to filter payroll details that are fully approved
+const filterFullyApprovedEmployees = async (payrollData, companyId, runId) => {
+  try {
+    // Get total number of reviewers for this company
+    const { count: totalReviewers, error: countError } = await supabase
+      .from("company_reviewers")
+      .select("*", { count: "exact", head: true })
+      .eq("company_id", companyId);
+
+    if (countError) {
+      console.error("Error fetching reviewer count:", countError);
+      return payrollData; // Fallback to return all data if error
+    }
+
+    if (totalReviewers === 0) {
+      // No reviewers means auto-approved? Or return empty? 
+      // Let's return all data if no reviewers configured
+      return payrollData;
+    }
+
+    // Get all payroll_detail_ids from the payrollData
+    const payrollDetailIds = payrollData.map(item => item.id);
+    
+    if (payrollDetailIds.length === 0) return payrollData;
+
+    // Get all reviews for these payroll details
+    const { data: reviews, error: reviewsError } = await supabase
+      .from("payroll_reviews")
+      .select("payroll_detail_id, status")
+      .in("payroll_detail_id", payrollDetailIds);
+
+    if (reviewsError) {
+      console.error("Error fetching reviews:", reviewsError);
+      return payrollData;
+    }
+
+    // Group reviews by payroll_detail_id
+    const reviewsByDetail = {};
+    reviews.forEach(review => {
+      if (!reviewsByDetail[review.payroll_detail_id]) {
+        reviewsByDetail[review.payroll_detail_id] = [];
+      }
+      reviewsByDetail[review.payroll_detail_id].push(review.status);
+    });
+
+    // Filter payroll data to only include fully approved employees
+    const approvedData = payrollData.filter(detail => {
+      const detailReviews = reviewsByDetail[detail.id] || [];
+      
+      // If no reviews for this detail, it's not approved
+      if (detailReviews.length === 0) return false;
+      
+      // Check if all reviews are APPROVED
+      const allApproved = detailReviews.every(status => status === "APPROVED");
+      
+      // Check if we have reviews from all reviewers
+      const hasAllReviews = detailReviews.length >= totalReviewers;
+      
+      return allApproved && hasAllReviews;
+    });
+
+    console.log(`Filtered ${payrollData.length} records to ${approvedData.length} fully approved employees`);
+    return approvedData;
+  } catch (error) {
+    console.error("Error in filterFullyApprovedEmployees:", error);
+    return payrollData; // Fallback to return all data on error
+  }
+};
+
 // Helper function to get all completed payroll runs for a year
 const fetchAnnualRunIds = async (companyId, year) => {
   const { data, error } = await supabase
@@ -24,7 +93,7 @@ const fetchAnnualRunIds = async (companyId, year) => {
 };
 
 // Helper function to get annual gross pay data
-const fetchAnnualGrossPayData = async (runIds) => {
+const fetchAnnualGrossPayData = async (runIds, companyId) => {
   const runIdList = runIds.map((run) => run.id); // extract only IDs
   if (runIdList.length === 0) return [];
 
@@ -32,9 +101,9 @@ const fetchAnnualGrossPayData = async (runIds) => {
     .from("payroll_details")
     .select(
       `
-                gross_pay,
+                gross_pay,id,
                 employee:employee_id (employee_number, first_name, last_name, middle_name),
-                payroll_run:payroll_run_id (payroll_month)
+                payroll_run:payroll_run_id (payroll_month, id)
             `
     )
     .in("payroll_run_id", runIdList);
@@ -43,7 +112,52 @@ const fetchAnnualGrossPayData = async (runIds) => {
     console.error("Supabase error fetching gross pay details:", error);
     throw new Error("Failed to fetch annual gross pay details.");
   }
-  return data;
+
+  // If no data, return empty array
+  if (!data || data.length === 0) return [];
+
+   // Get all payroll_detail_ids
+  const payrollDetailIds = data.map(item => item.id);
+  
+  // Get all reviews for these payroll details
+  const { data: reviews, error: reviewsError } = await supabase
+    .from("payroll_reviews")
+    .select("payroll_detail_id, status")
+    .in("payroll_detail_id", payrollDetailIds);
+
+  if (reviewsError) {
+    console.error("Error fetching reviews for annual data:", reviewsError);
+    return data; // Fallback to return all data
+  }
+
+  // Get total reviewers count per run (since different runs might have different reviewers?)
+  // For simplicity, we'll get the reviewer count for the company once
+  const { count: totalReviewers } = await supabase
+    .from("company_reviewers")
+    .select("*", { count: "exact", head: true })
+    .eq("company_id", companyId);
+
+  if (totalReviewers === 0) return data; // No reviewers, return all
+
+  // Group reviews by payroll_detail_id
+  const reviewsByDetail = {};
+  reviews.forEach(review => {
+    if (!reviewsByDetail[review.payroll_detail_id]) {
+      reviewsByDetail[review.payroll_detail_id] = [];
+    }
+    reviewsByDetail[review.payroll_detail_id].push(review.status);
+  });
+
+  // Filter data to only include fully approved employees
+  const approvedData = data.filter(detail => {
+    const detailReviews = reviewsByDetail[detail.id] || [];
+    if (detailReviews.length === 0) return false;
+    const allApproved = detailReviews.every(status => status === "APPROVED");
+    const hasAllReviews = detailReviews.length >= totalReviewers;
+    return allApproved && hasAllReviews;
+  });
+
+  return approvedData;
 };
 
 // Helper function to fetch payroll details for a given run
@@ -88,7 +202,10 @@ const fetchPayrollData = async (companyId, runId) => {
     throw new Error("Unauthorized access to payroll run.");
   }
 
-  return data;
+   // Filter to only include fully approved employees
+  const approvedData = await filterFullyApprovedEmployees(data, companyId, runId);
+  
+  return approvedData;
 };
 
 // Helper function to fetch company details
@@ -182,7 +299,7 @@ export const generateAnnualGrossEarningsReport = async (req, res) => {
         .status(404)
         .json({ error: "No completed payroll runs found for that year." });
 
-    const rawData = await fetchAnnualGrossPayData(runData);
+    const rawData = await fetchAnnualGrossPayData(runData, companyId);
 
     // 3. Transform Data
     const employeeMap = {};
@@ -868,15 +985,21 @@ const generateBankPaymentFile = (data) => {
         record.employee.last_name
       }`.trim(),
       record.account_name,
+      record.account_number,
+      record.bank_name,
       record.bank_code || "",
+      record.branch_name || "",
       record.branch_code || "",
       formatCurrency(record.net_pay),
       `Payroll Ref ${record.payroll_run.payroll_number}`,
     ]);
   const columns = [
     "full names",
+    "account name",
     "account number",
+    "bank name",
     "bank code",
+    "branch name",
     "branch code",
     "amount",
     "reference",

@@ -3,6 +3,7 @@ import supabase from "../libs/supabaseClient.js";
 export const getPayrollReportData = async (req, res) => {
   const { companyId, runId } = req.params;
   const userId = req.userId;
+  const { view } = req.query; 
   try {
     // 1. Get the reviewer's ID for this company based on the logged-in user
     const { data: reviewer } = await supabase
@@ -48,6 +49,19 @@ export const getPayrollReportData = async (req, res) => {
 
     if (error) throw error;
 
+    // PROFESSIONAL UX: Identify top 4 allowance names across all employees
+    const allowanceCounts = {};
+    details.forEach(detail => {
+      detail.allowances_details?.forEach(allow => {
+        allowanceCounts[allow.name] = (allowanceCounts[allow.name] || 0) + 1;
+      });
+    });
+
+    const topAllowanceNames = Object.entries(allowanceCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([name]) => name);
+
     // Fetch total number of reviewers for this company to determine approval status
     const { count: totalReviewers } = await supabase
       .from("company_reviewers")
@@ -59,6 +73,19 @@ export const getPayrollReportData = async (req, res) => {
       const myReview = item.payroll_reviews?.find(r => r.company_reviewer_id === reviewer?.id);
       const emp = item.employees;
       const fullName = `${emp.first_name} ${emp.middle_name || ""} ${emp.last_name}`;
+      let topAllowances = {};
+      let othersSum = 0;
+
+      // Initialize top columns with 0
+      topAllowanceNames.forEach(name => topAllowances[name] = 0);
+
+      item.allowances_details?.forEach(allow => {
+        if (topAllowanceNames.includes(allow.name)) {
+          topAllowances[allow.name] = allow.value;
+        } else if (allow.is_cash) {
+          othersSum += allow.value;
+        }
+      });
 
       // Calculate dynamic status for Review & Approve
       const approvedCount =
@@ -102,7 +129,8 @@ export const getPayrollReportData = async (req, res) => {
         otherAllowances: item.allowances_details
           ?.filter((a) => a.type !== "CASH")
           .reduce((sum, a) => sum + a.value, 0),
-
+          topAllowances, // Specific columns
+        otherCashAllowances: othersSum,
         // Deductions Specific
         employmentType: emp.employee_type,
         paye: item.paye_tax,
@@ -133,7 +161,19 @@ export const getPayrollReportData = async (req, res) => {
       };
     });
 
-    res.status(200).json(reports);
+   // Check if this is an earnings-specific request (you can add a query param)
+// Add this line at the beginning of your function
+
+if (view === 'earnings') {
+  // Return with dynamic columns for earnings view
+  res.json({ 
+    data: reports, 
+    columns: topAllowanceNames 
+  });
+} else {
+  // Return just the array for other views
+  res.json(reports);
+}
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

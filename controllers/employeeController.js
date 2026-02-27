@@ -1,12 +1,12 @@
 // backend/controllers/employeeController.js
 import supabase from "../libs/supabaseClient.js";
 import { sendEmailService } from "../services/brevo.js";
-//import { sendEmailService } from "../services/email.js";
-//import { dispatchEmail } from "../services/resendService.js";
 import ExcelJS from "exceljs";
 import pkg from "xlsx";
 import { authorize } from "../utils/authorize.js";
-//import { sendEmail } from "../services/email.js";
+import { getCurrentCompanyUser } from "../utils/companyUserHelper.js";
+import { createAuditLog } from "../utils/auditLogger.js";
+import { cleanEmployeesData } from "../utils/dataCleaner.js";
 const { utils, read, SSF } = pkg;
 
 // -------------------- Helper Functions -------------------- //
@@ -175,25 +175,17 @@ export const sendEmployeeEmail = async (req, res) => {
       return res.status(403).json({ error: "Company not found" });
     }
 
+    const currentYear = new Date().getFullYear();
+
     const htmlContent = `
       <div style="font-family: sans-serif; color: #334155; line-height: 1.6;">
-        <h2 style="color: #0f172a;">Sent from ${company.business_name} via WageDesk</h2>
         <div style="border-left: 4px solid #6366f1; padding-left: 16px; margin: 20px 0;">
           ${body}
         </div>
-        <p style="font-size: 12px; color: #94a3b8;">
-          This is an automated message .
-        </p>
+        <hr style="margin-top:24px;border:none;border-top:1px solid #eee;"/>
+      <p style="font-size:11px;color:#999;text-align:center;">Powered by WageDesk · ${currentYear}</p>
       </div>
     `;
-    /*
-    const result = await dispatchEmail({
-      to: recipients,
-      subject,
-      html: htmlContent,
-      text: body, // Fallback text version
-    });*/
-
     // 3️ Send emails (rate-limited for free tier)
     for (const email of recipients) {
       await sendEmailService({
@@ -274,11 +266,14 @@ export const addEmployee = async (req, res) => {
   const userId = req.userId;
   const { bank_details, contract_details, ...employeeData } = req.body;
 
+  // Clean the employee data
+  const cleanEmployeeData = cleanEmployeesData(employeeData);
+
   if (
-    !employeeData.employee_number ||
-    !employeeData.first_name ||
-    !employeeData.last_name ||
-    !employeeData.salary
+    !cleanEmployeeData.employee_number ||
+    !cleanEmployeeData.first_name ||
+    !cleanEmployeeData.last_name ||
+    !cleanEmployeeData.salary
   ) {
     return res.status(400).json({ error: "Required fields are missing." });
   }
@@ -296,9 +291,13 @@ export const addEmployee = async (req, res) => {
       });
     }
 
+
+    // Get company user ID for history tracking
+    const companyUser = await getCurrentCompanyUser(userId, companyId);
+
     const { data: newEmployee, error: empError } = await supabase
       .from("employees")
-      .insert({ ...employeeData, company_id: companyId })
+      .insert({ ...cleanEmployeeData, company_id: companyId })
       .select()
       .single();
 
@@ -314,7 +313,39 @@ export const addEmployee = async (req, res) => {
       throw new Error("Failed to add employee.");
     }
 
-    // 3. Insert Payment Details
+    // Track initial salary in history
+    const { error: salaryHistoryError } = await supabase
+      .from("employee_salary_history")
+      .insert({
+        employee_id: newEmployee.id,
+        salary: cleanEmployeeData.salary,
+        effective_date: cleanEmployeeData.hire_date || new Date().toISOString().split('T')[0],
+        changed_by: companyUser.id,
+        reason: "Initial salary setup",
+        notes: "Employee created",
+      });
+
+    if (salaryHistoryError) {
+      console.error("Failed to create salary history:", salaryHistoryError);
+    }
+
+     // Track initial status in history
+    const { error: statusHistoryError } = await supabase
+      .from("employee_status_history")
+      .insert({
+        employee_id: newEmployee.id,
+        status: cleanEmployeeData.employee_status || "ACTIVE",
+        effective_date: cleanEmployeeData.employee_status_effective_date || employeeData.hire_date || new Date().toISOString().split('T')[0],
+        changed_by: companyUser.id,
+        reason: "Initial status setup",
+        notes: "Employee created",
+      });
+
+    if (statusHistoryError) {
+      console.error("Failed to create status history:", statusHistoryError);
+    }
+
+    // Insert Payment Details
     if (bank_details) {
       await supabase.from("employee_payment_details").insert({
         ...bank_details,
@@ -322,17 +353,171 @@ export const addEmployee = async (req, res) => {
       });
     }
 
-    // 4. Insert Contract Details
+     // Insert Contract Details and track in history
     if (contract_details) {
-      await supabase.from("employee_contracts").insert({
-        ...contract_details,
-        employee_id: newEmployee.id,
-      });
+      const { data: newContract, error: contractError } = await supabase
+        .from("employee_contracts")
+        .insert({
+          ...contract_details,
+          employee_id: newEmployee.id,
+        })
+        .select()
+        .single();
+
+      if (!contractError && newContract) {
+        // Track contract in history
+        await supabase.from("employee_contract_history").insert({
+          employee_id: newEmployee.id,
+          contract_type: newContract.contract_type,
+          start_date: newContract.start_date,
+          end_date: newContract.end_date,
+          probation_end_date: newContract.probation_end_date,
+          contract_status: newContract.contract_status,
+          changed_by: companyUser.id,
+          reason: "Initial contract setup",
+        });
+      }
     }
+
+     // Create audit log
+    await createAuditLog({
+      entityType: "employees",
+      entityId: newEmployee.id,
+      action: "CREATE",
+      performedBy: userId,
+      newData: {
+        ...cleanEmployeeData,
+        bank_details,
+        contract_details,
+      },
+    });
 
     res.status(201).json(newEmployee);
   } catch (error) {
     console.error("Add employee controller error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Add to employeeController.js
+
+export const addSalaryChange = async (req, res) => {
+  const { companyId, employeeId } = req.params;
+  const userId = req.userId;
+  const { salary, effective_date, reason, notes } = req.body;
+
+  try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Unauthorized." });
+    }
+
+    const companyUser = await getCurrentCompanyUser(userId, companyId);
+
+    // Update employee's current salary
+    const { data: updatedEmployee, error: updateError } = await supabase
+      .from("employees")
+      .update({ salary })
+      .eq("id", employeeId)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    // Add to history
+    const { data: history, error: historyError } = await supabase
+      .from("employee_salary_history")
+      .insert({
+        employee_id: employeeId,
+        salary,
+        effective_date: effective_date || new Date().toISOString().split('T')[0],
+        changed_by: companyUser.id,
+        reason: reason || "Manual salary update",
+        notes,
+      })
+      .select()
+      .single();
+
+    if (historyError) throw historyError;
+
+    // Audit log
+    await createAuditLog({
+      entityType: "employees",
+      entityId: employeeId,
+      action: "UPDATE",
+      performedBy: userId,
+      newData: { salary_change: { salary, effective_date, reason } },
+    });
+
+    res.status(201).json(history);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+export const addStatusChange = async (req, res) => {
+  const { companyId, employeeId } = req.params;
+  const userId = req.userId;
+  const { status, effective_date, reason, notes } = req.body;
+
+  try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Unauthorized." });
+    }
+
+    const companyUser = await getCurrentCompanyUser(userId, companyId);
+
+    // Update employee's current status
+    const { data: updatedEmployee, error: updateError } = await supabase
+      .from("employees")
+      .update({ 
+        employee_status: status,
+        employee_status_effective_date: effective_date 
+      })
+      .eq("id", employeeId)
+      .select()
+      .single();
+
+    if (updateError) throw updateError;
+
+    // Add to history
+    const { data: history, error: historyError } = await supabase
+      .from("employee_status_history")
+      .insert({
+        employee_id: employeeId,
+        status,
+        effective_date: effective_date || new Date().toISOString().split('T')[0],
+        changed_by: companyUser.id,
+        reason: reason || "Manual status update",
+        notes,
+      })
+      .select()
+      .single();
+
+    if (historyError) throw historyError;
+
+    // Audit log
+    await createAuditLog({
+      entityType: "employees",
+      entityId: employeeId,
+      action: "UPDATE",
+      performedBy: userId,
+      newData: { status_change: { status, effective_date, reason } },
+    });
+
+    res.status(201).json(history);
+  } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
@@ -359,34 +544,57 @@ export const updateEmployee = async (req, res) => {
       });
     }
 
-    // Ensure the user owns the company and the employee belongs to that company
-    const { data: employee, error: employeeCheckError } = await supabase
+    // Get current employee data for comparison and audit
+    const { data: currentEmployee, error: fetchError } = await supabase
       .from("employees")
-      .select("id, company_id")
+      .select("*")
       .eq("id", employeeId)
       .eq("company_id", companyId)
       .single();
 
-    if (employeeCheckError || !employee) {
-      return res
-        .status(403)
-        .json({ error: "Unauthorized or employee not found." });
+    if (fetchError || !currentEmployee) {
+      return res.status(404).json({ error: "Employee not found." });
     }
 
-    const { data, error } = await supabase
+    // Get company user ID for history tracking
+    const companyUser = await getCurrentCompanyUser(userId, companyId);
+
+    // Check if salary changed
+    if (currentEmployee.salary !== employeeData.salary) {
+      await supabase.from("employee_salary_history").insert({
+        employee_id: employeeId,
+        salary: employeeData.salary,
+        effective_date: employeeData.salary_effective_date || new Date().toISOString().split('T')[0],
+        changed_by: companyUser.id,
+        reason: employeeData.salary_change_reason || "Salary update",
+        notes: employeeData.salary_change_notes || null,
+      });
+    }
+
+    // Check if status changed
+    if (currentEmployee.employee_status !== employeeData.employee_status) {
+      await supabase.from("employee_status_history").insert({
+        employee_id: employeeId,
+        status: employeeData.employee_status,
+        effective_date: employeeData.employee_status_effective_date || new Date().toISOString().split('T')[0],
+        changed_by: companyUser.id,
+        reason: employeeData.status_change_reason || "Status change",
+        notes: employeeData.status_change_notes || null,
+      });
+    }
+
+    // Update the employee
+    const { data: updatedEmployee, error: updateError } = await supabase
       .from("employees")
-      .update({
-        department_id: validatedDepartmentId,
-        ...employeeData,
-      })
+      .update(employeeData)
       .eq("id", employeeId)
-      .eq("company_id", companyId) // Ensure only employee for this company is updated
+      .eq("company_id", companyId)
       .select()
       .single();
 
-    if (error) {
-      console.error("Update employee error:", error);
-      if (error.code === "23505") {
+    if (updateError) {
+      console.error("Update employee error:", updateError);
+      if (updateError.code === "23505") {
         return res.status(409).json({
           error: "An employee with similar unique details already exists.",
         });
@@ -394,11 +602,156 @@ export const updateEmployee = async (req, res) => {
       throw new Error("Failed to update employee.");
     }
 
-    res.status(200).json(data);
+    // Create audit log
+    await createAuditLog({
+      entityType: "employees",
+      entityId: employeeId,
+      action: "UPDATE",
+      performedBy: userId,
+      oldData: currentEmployee,
+      newData: updatedEmployee,
+    });
+
+     res.status(200).json(updatedEmployee);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Get salary history for an employee
+export const getEmployeeSalaryHistory = async (req, res) => {
+  const { companyId, employeeId } = req.params;
+  const userId = req.userId;
+
+  try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_read",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Unauthorized." });
+    }
+
+    const { data, error } = await supabase
+      .from("employee_salary_history")
+      .select(`
+        *,
+         changed_by_user:company_users!changed_by (
+          id,
+          full_name,
+          email,
+          user_id
+        )
+      `)
+      .eq("employee_id", employeeId)
+      .order("effective_date", { ascending: false })
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+     // Transform to ensure consistent structure
+    const transformedData = data.map(item => ({
+      ...item,
+      changed_by_user: item.changed_by_user || null
+    }));
+
+    res.status(200).json(transformedData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Get status history for an employee
+export const getEmployeeStatusHistory = async (req, res) => {
+  const { companyId, employeeId } = req.params;
+  const userId = req.userId;
+
+  try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_read",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Unauthorized." });
+    }
+
+    const { data, error } = await supabase
+      .from("employee_status_history")
+      .select(`
+        *,
+        changed_by_user:company_users!changed_by (
+          id,
+          full_name,
+          email,
+          user_id
+        )
+      `)
+      .eq("employee_id", employeeId)
+      .order("effective_date", { ascending: false })
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+   // Transform to ensure consistent structure
+    const transformedData = data.map(item => ({
+      ...item,
+      changed_by_user: item.changed_by_user || null
+    }));
+
+    res.status(200).json(transformedData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Get contract history for an employee
+export const getEmployeeContractHistory = async (req, res) => {
+  const { companyId, employeeId } = req.params;
+  const userId = req.userId;
+
+  try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_read",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({ error: "Unauthorized." });
+    }
+
+    const { data, error } = await supabase
+      .from("employee_contract_history")
+      .select(`
+        *,
+        changed_by_user:company_users!changed_by (
+          id,
+          full_name,
+          email,
+          user_id
+        )
+      `)
+      .eq("employee_id", employeeId)
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+
+    // Transform to ensure consistent structure
+    const transformedData = data.map(item => ({
+      ...item,
+      changed_by_user: item.changed_by_user || null
+    }));
+
+    res.status(200).json(transformedData);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
 
 // backend/controllers/employeeController.js
 
@@ -616,6 +969,9 @@ export const importEmployees = async (req, res) => {
         error: "Unauthorized to bulk import.",
       });
     }
+
+    // Get company user for history tracking
+    const companyUser = await getCurrentCompanyUser(userId, companyId);
 
     // Get all departments, subs and titles for validation
     const [deptsRes, subDeptsRes, titlesRes] = await Promise.all([
@@ -940,7 +1296,7 @@ export const importEmployees = async (req, res) => {
         onConflict: "company_id, employee_number",
         ignoreDuplicates: false,
       })
-      .select("id, employee_number");
+      .select("id, employee_number, salary, employee_status, hire_date");
 
     if (empError) {
       console.error("Bulk upsert employee error:", empError);
@@ -960,6 +1316,11 @@ export const importEmployees = async (req, res) => {
     // Map the returned UUIDs back to our original data using employee_number as the key
     const paymentRecords = [];
     const contractRecords = [];
+    // Track salary and status history for all imported employees
+    const salaryHistoryRecords = [];
+    const statusHistoryRecords = [];
+    const contractHistoryRecords = [];
+    
 
     insertedEmployees.forEach((emp) => {
       const originalData = employeesToInsert.find(
@@ -967,6 +1328,38 @@ export const importEmployees = async (req, res) => {
       );
 
       if (originalData) {
+         // Salary history
+        salaryHistoryRecords.push({
+          employee_id: emp.id,
+          salary: emp.salary,
+          effective_date: emp.hire_date || new Date().toISOString().split('T')[0],
+          changed_by: companyUser.id,
+          reason: "Bulk import - initial salary",
+        });
+
+        // Status history
+        statusHistoryRecords.push({
+          employee_id: emp.id,
+          status: emp.employee_status || "ACTIVE",
+          effective_date: emp.hire_date || new Date().toISOString().split('T')[0],
+          changed_by: companyUser.id,
+          reason: "Bulk import - initial status",
+        });
+
+        // Contract history (if applicable)
+        if (originalData.contractDetail) {
+          contractHistoryRecords.push({
+            employee_id: emp.id,
+            contract_type: originalData.contractDetail.contract_type,
+            start_date: originalData.contractDetail.start_date,
+            end_date: originalData.contractDetail.end_date,
+            probation_end_date: originalData.contractDetail.probation_end_date,
+            contract_status: originalData.contractDetail.contract_status,
+            changed_by: companyUser.id,
+            reason: "Bulk import - initial contract",
+          });
+        }
+
         paymentRecords.push({
           ...originalData.paymentDetail,
           employee_id: emp.id,
@@ -976,6 +1369,28 @@ export const importEmployees = async (req, res) => {
           employee_id: emp.id,
         });
       }
+    });
+
+     // Insert all history records
+    if (salaryHistoryRecords.length > 0) {
+      await supabase.from("employee_salary_history").insert(salaryHistoryRecords);
+    }
+    
+    if (statusHistoryRecords.length > 0) {
+      await supabase.from("employee_status_history").insert(statusHistoryRecords);
+    }
+    
+    if (contractHistoryRecords.length > 0) {
+      await supabase.from("employee_contract_history").insert(contractHistoryRecords);
+    }
+
+     // Create audit log for bulk import
+    await createAuditLog({
+      entityType: "employees",
+      entityId: "BULK_IMPORT", // or you could create individual logs for each employee
+      action: "CREATE",
+      performedBy: userId,
+      newData: { count: insertedEmployees.length },
     });
 
     // 2. Upsert Payment Details

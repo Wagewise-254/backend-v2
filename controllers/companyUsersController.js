@@ -236,14 +236,15 @@ export const addCompanyUser = async (req, res) => {
 
     // Send email if requested
     if (send_email) {
-      const loginUrl = `${process.env.FRONTEND_URL || 'http://localhost:5173'}/login`;
+      const currentYear = new Date().getFullYear();
       
       let emailBody = '';
       if (isExistingUser) {
         emailBody = `
           <p>You have been added to <strong>${company.business_name}</strong> on WageDesk with the role of <strong>${role}</strong>.</p>
           <p>You can continue using your existing account to access this company.</p>
-          <p><a href="${loginUrl}" style="background-color: #1F3A8A; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Login to WageDesk</a></p>
+         <hr style="margin-top:24px;border:none;border-top:1px solid #eee;"/>
+      <p style="font-size:11px;color:#999;text-align:center;">Powered by WageDesk · ${currentYear}</p>
         `;
       } else {
         emailBody = `
@@ -254,7 +255,8 @@ export const addCompanyUser = async (req, res) => {
             <p style="margin: 0 0 4px 0;">Temporary password: <strong>${temporaryPassword}</strong></p>
             <p style="margin: 8px 0 0 0; font-size: 14px; color: #4b5563;">You'll be prompted to change this password on first login.</p>
           </div>
-          <p><a href="${loginUrl}" style="background-color: #1F3A8A; color: white; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block; margin-top: 10px;">Login to WageDesk</a></p>
+          <hr style="margin-top:24px;border:none;border-top:1px solid #eee;"/>
+      <p style="font-size:11px;color:#999;text-align:center;">Powered by WageDesk · ${currentYear}</p>
         `;
       }
 
@@ -270,7 +272,7 @@ export const addCompanyUser = async (req, res) => {
             </p>
           </div>
         `,
-        text: `You've been added to ${company.business_name} on WageDesk. Login at ${loginUrl}`,
+        text: `You've been added to ${company.business_name} on WageDesk.`,
         company: company.business_name,
       });
 

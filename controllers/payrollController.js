@@ -202,7 +202,6 @@ const calculateOtherNonCashBenefit = (benefitValue) => {
 
 // --- Main Payroll Functions ---
 export const syncPayroll = async (req, res) => {
-  console.log("run payroll")
   const { companyId } = req.params;
   const { month: payrollMonth, year: payrollYear } = req.body;
   const userId = req.userId;
@@ -814,6 +813,7 @@ export const completePayrollRun = async (req, res) => {
 
 export const getPayrollRuns = async (req, res) => {
   const { companyId } = req.params;
+  const { exclude, limit, month, year, sort } = req.query;
 
   try {
     const { data, error } = await supabase

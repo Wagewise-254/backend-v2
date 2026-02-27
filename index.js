@@ -16,6 +16,7 @@ import payrollRoutes from './routes/payrollRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
 import payslipRoutes from './routes/payslipRoutes.js';
 import p9aRoutes from './routes/p9aRoutes.js';
+import auditRoutes from './routes/auditRoutes.js';
 
 dotenv.config();
 
@@ -24,7 +25,7 @@ app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
-    res.send('WageWise Backend is running!');
+    res.send('WageDesk Backend is running!');
 });
 
 app.get('/api/ping', (req, res) => {
@@ -48,7 +49,7 @@ app.use('/api/company', allowanceRoutes);
 app.use('/api/company', deductionTypeRoutes);
 app.use('/api/company', deductionRoutes);
 app.use('/api/company', companyReviewersRoutes);
-
+app.use('/api/company', auditRoutes);
 
 
 const PORT = process.env.PORT || 3001;
