@@ -240,8 +240,8 @@ export const syncPayroll = async (req, res) => {
 
   // Validate month
   if (!monthNames.includes(payrollMonth)) {
-    return res.status(400).json({ 
-      error: `Invalid month. Must be one of: ${monthNames.join(', ')}` 
+    return res.status(400).json({
+      error: `Invalid month. Must be one of: ${monthNames.join(", ")}`,
     });
   }
 
@@ -426,27 +426,27 @@ export const syncPayroll = async (req, res) => {
     if (deductionsResult.error) throw new Error("Failed to fetch deductions.");
     if (absentDaysResult.error) throw new Error("Failed to fetch absent days.");
 
-     // Filter allowances and deductions in memory based on month/year
-    const allAllowances = allowancesResult.data.filter(allowance => 
+    // Filter allowances and deductions in memory based on month/year
+    const allAllowances = allowancesResult.data.filter((allowance) =>
       isInPayrollPeriod(
         allowance.start_month,
         allowance.start_year,
         allowance.end_month,
         allowance.end_year,
         payrollMonth,
-        payrollYear
-      )
+        payrollYear,
+      ),
     );
 
-    const allDeductions = deductionsResult.data.filter(deduction => 
+    const allDeductions = deductionsResult.data.filter((deduction) =>
       isInPayrollPeriod(
         deduction.start_month,
         deduction.start_year,
         deduction.end_month,
         deduction.end_year,
         payrollMonth,
-        payrollYear
-      )
+        payrollYear,
+      ),
     );
     const absentDaysRecords = absentDaysResult.data || [];
 
@@ -1212,67 +1212,29 @@ export const updateItemReviewStatus = async (req, res) => {
   }
 };
 
-// backend/controllers/payrollController.js
-
 // Add this new function for bulk review updates
 export const bulkUpdateReviewStatus = async (req, res) => {
   const { companyId } = req.params;
   const { reviewIds, status } = req.body; // status: 'APPROVED', 'REJECTED', or 'PENDING'
 
   if (!reviewIds || !Array.isArray(reviewIds) || reviewIds.length === 0) {
-    return res.status(400).json({ error: "Review IDs array is required" });
-  }
-
-  if (!status || !['APPROVED', 'REJECTED', 'PENDING'].includes(status)) {
-    return res.status(400).json({ error: "Valid status is required" });
+    return res.status(400).json({ error: "No review IDs provided." });
   }
 
   try {
-    // First, verify that all reviews belong to this company
-    // This is an extra security check to prevent updating reviews from other companies
-    const { data: reviews, error: fetchError } = await supabase
-      .from("payroll_reviews")
-      .select(`
-        id,
-        payroll_detail_id,
-        payroll_details!inner (
-          payroll_run_id,
-          payroll_runs!inner (
-            company_id
-          )
-        )
-      `)
-      .in("id", reviewIds);
-
-    if (fetchError) throw fetchError;
-
-    // Check if all reviews belong to the company
-    const invalidReviews = reviews.filter(
-      review => review.payroll_details?.payroll_runs?.company_id !== companyId
-    );
-
-    if (invalidReviews.length > 0) {
-      return res.status(403).json({ 
-        error: "Some reviews do not belong to this company" 
-      });
-    }
-
-    // Perform bulk update
-    const { data, error } = await supabase
+    const { error } = await supabase
       .from("payroll_reviews")
       .update({
-        status,
-        reviewed_at: status === "PENDING" ? null : new Date().toISOString(),
+        status: status,
+        reviewed_at: new Date().toISOString(),
       })
       .in("id", reviewIds)
-      .select();
 
     if (error) throw error;
 
     res.json({
-      message: `Successfully updated ${data.length} review(s)`,
-      updated: data
-    });
+  message: `Successfully updated ${reviewIds.length} item(s).`,
+});
   } catch (error) {
     console.error("Bulk update error:", error);
     res.status(500).json({ error: "Bulk update failed" });
