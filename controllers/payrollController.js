@@ -298,32 +298,46 @@ export const syncPayroll = async (req, res) => {
       payrollRunId = newRunId;
     }
 
+    // 3. Fetch existing payroll details with their review statuses if this is a resync
+    const existingDetailsMap = new Map();
+    const existingReviewsMap = new Map();
+
     // 3. Delete existing records in correct order
     if (!isNewRun) {
       // First, get all payroll details for this run
       const { data: existingDetails } = await supabase
         .from("payroll_details")
-        .select("id")
+        .select(`
+          id,
+          employee_id,
+          basic_salary,
+          total_cash_allowances,
+          total_non_cash_benefits,
+          gross_pay,
+          net_pay,
+          allowances_details,
+          deductions_details,
+          payroll_reviews (
+            id,
+            status,
+            company_reviewer_id
+          )
+        `)
         .eq("payroll_run_id", payrollRunId);
 
-      if (existingDetails && existingDetails.length > 0) {
-        const detailIds = existingDetails.map((d) => d.id);
-
-        // Delete reviews first (due to foreign key)
-        const { error: deleteReviewsError } = await supabase
-          .from("payroll_reviews")
-          .delete()
-          .in("payroll_detail_id", detailIds);
-
-        if (deleteReviewsError) throw deleteReviewsError;
-
-        // Then delete payroll details
-        const { error: deleteDetailsError } = await supabase
-          .from("payroll_details")
-          .delete()
-          .eq("payroll_run_id", payrollRunId);
-
-        if (deleteDetailsError) throw deleteDetailsError;
+       if (existingDetails) {
+        existingDetails.forEach(detail => {
+          existingDetailsMap.set(detail.employee_id, detail);
+          
+          // Store reviews by employee and reviewer
+          if (detail.payroll_reviews) {
+            const reviewsByReviewer = new Map();
+            detail.payroll_reviews.forEach(review => {
+              reviewsByReviewer.set(review.company_reviewer_id, review);
+            });
+            existingReviewsMap.set(detail.employee_id, reviewsByReviewer);
+          }
+        });
       }
     }
 
@@ -462,6 +476,16 @@ export const syncPayroll = async (req, res) => {
 
     // 7. Calculate payroll for each employee
     const payrollDetailsToInsert = [];
+    const payrollDetailsToUpdate = [];
+    const payrollDetailsToDelete = new Set(); // Track employees no longer eligible
+
+    // Start with all existing employees in the delete set
+    if (!isNewRun) {
+      existingDetailsMap.forEach((_, employeeId) => {
+        payrollDetailsToDelete.add(employeeId);
+      });
+    }
+
     let totals = {
       totalGrossPay: 0,
       totalStatutoryDeductions: 0,
@@ -474,6 +498,9 @@ export const syncPayroll = async (req, res) => {
     };
 
     for (const employee of eligibleEmployees) {
+       // Remove from delete set since this employee is still eligible
+      payrollDetailsToDelete.delete(employee.id);
+
       // Get employee type from contract
       const employeeType = employee.employee_type || "Primary Employee";
       const isDisabled = employee.has_disability || false;
@@ -739,7 +766,7 @@ export const syncPayroll = async (req, res) => {
       const paymentDetails = employee.employee_payment_details || {};
 
       // Prepare payroll detail record
-      payrollDetailsToInsert.push({
+       const payrollDetail = {
         id: uuidv4(),
         payroll_run_id: payrollRunId,
         employee_id: employee.id,
@@ -775,7 +802,37 @@ export const syncPayroll = async (req, res) => {
         absent_days: absentDaysCount,
         absent_days_deduction: absentDaysDeduction,
         created_at: new Date().toISOString(),
-      });
+      };
+
+      // Check if this employee had existing payroll details
+      const existingDetail = existingDetailsMap.get(employee.id);
+      
+      if (existingDetail) {
+        // Compare key values to see if anything changed
+        const hasChanged = 
+          existingDetail.basic_salary !== payrollDetail.basic_salary ||
+          existingDetail.total_cash_allowances !== payrollDetail.total_cash_allowances ||
+          existingDetail.total_non_cash_benefits !== payrollDetail.total_non_cash_benefits ||
+          existingDetail.gross_pay !== payrollDetail.gross_pay ||
+          existingDetail.net_pay !== payrollDetail.net_pay ||
+          JSON.stringify(existingDetail.allowances_details) !== JSON.stringify(payrollDetail.allowances_details) ||
+          JSON.stringify(existingDetail.deductions_details) !== JSON.stringify(payrollDetail.deductions_details);
+
+        if (hasChanged) {
+          // If changed, mark for update and include existing ID
+          payrollDetail.id = existingDetail.id;
+          payrollDetailsToUpdate.push(payrollDetail);
+          
+          // Reset reviews for this employee if something changed
+          if (existingReviewsMap.has(employee.id)) {
+            await resetEmployeeReviews(existingDetail.id, existingReviewsMap.get(employee.id));
+          }
+        }
+        // If no change, keep existing data and don't modify
+      } else {
+        // New employee, add to insert
+        payrollDetailsToInsert.push(payrollDetail);
+      }
 
       // Update totals
       totals.totalGrossPay += totalGrossPay;
@@ -788,6 +845,39 @@ export const syncPayroll = async (req, res) => {
       totals.totalHELB += helbDeduction;
     }
 
+    // 8. Handle deletions (employees no longer eligible)
+    if (payrollDetailsToDelete.size > 0) {
+      const deleteEmployeeIds = Array.from(payrollDetailsToDelete);
+      
+      // Get payroll detail IDs to delete
+      const { data: detailsToDelete } = await supabase
+        .from("payroll_details")
+        .select("id")
+        .eq("payroll_run_id", payrollRunId)
+        .in("employee_id", deleteEmployeeIds);
+
+      if (detailsToDelete && detailsToDelete.length > 0) {
+        const detailIdsToDelete = detailsToDelete.map(d => d.id);
+        
+        // Delete reviews first
+        const { error: deleteReviewsError } = await supabase
+          .from("payroll_reviews")
+          .delete()
+          .in("payroll_detail_id", detailIdsToDelete);
+
+        if (deleteReviewsError) throw deleteReviewsError;
+
+        // Then delete payroll details
+        const { error: deleteDetailsError } = await supabase
+          .from("payroll_details")
+          .delete()
+          .in("id", detailIdsToDelete);
+
+        if (deleteDetailsError) throw deleteDetailsError;
+      }
+    }
+
+
     // 8. Insert all payroll details
     if (payrollDetailsToInsert.length > 0) {
       const { error: insertError } = await supabase
@@ -795,6 +885,18 @@ export const syncPayroll = async (req, res) => {
         .insert(payrollDetailsToInsert);
 
       if (insertError) throw insertError;
+    }
+
+    // 10. Update existing payroll details
+    if (payrollDetailsToUpdate.length > 0) {
+      for (const detail of payrollDetailsToUpdate) {
+        const { error: updateError } = await supabase
+          .from("payroll_details")
+          .update(detail)
+          .eq("id", detail.id);
+
+        if (updateError) throw updateError;
+      }
     }
 
     // 9. Update payroll run totals
@@ -811,9 +913,13 @@ export const syncPayroll = async (req, res) => {
 
     if (updateError) throw updateError;
 
-    // 8. Initialize reviews (make sure this doesn't duplicate)
-    if (isNewRun) {
-      await initializePayrollReviews(payrollRunId, companyId);
+     // 12. Initialize reviews for new employees
+    if (payrollDetailsToInsert.length > 0) {
+      await initializePayrollReviewsForEmployees(
+        payrollRunId, 
+        companyId, 
+        payrollDetailsToInsert.map(d => d.id)
+      );
     }
 
     // Commit transaction
@@ -827,6 +933,12 @@ export const syncPayroll = async (req, res) => {
       payrollRunId,
       isNewRun,
       totals,
+       stats: {
+        inserted: payrollDetailsToInsert.length,
+        updated: payrollDetailsToUpdate.length,
+        deleted: payrollDetailsToDelete.size,
+        unchanged: existingDetailsMap.size - payrollDetailsToUpdate.length - payrollDetailsToDelete.size
+      }
     });
   } catch (error) {
     await supabase.rpc("rollback_transaction");
@@ -838,6 +950,72 @@ export const syncPayroll = async (req, res) => {
   }
 };
 
+// Helper function to reset reviews for an employee when data changes
+async function resetEmployeeReviews(payrollDetailId, existingReviews) {
+  if (!existingReviews || existingReviews.size === 0) return;
+  
+  // Only reset APPROVED or REJECTED reviews back to PENDING
+  const reviewIdsToReset = [];
+  existingReviews.forEach((review, reviewerId) => {
+    if (review.status !== 'PENDING') {
+      reviewIdsToReset.push(review.id);
+    }
+  });
+
+  if (reviewIdsToReset.length > 0) {
+    const { error } = await supabase
+      .from("payroll_reviews")
+      .update({
+        status: 'PENDING',
+        reviewed_at: null
+      })
+      .in("id", reviewIdsToReset);
+
+    if (error) {
+      console.error("Failed to reset reviews:", error);
+      throw error;
+    }
+  }
+}
+
+// Helper function to initialize reviews for specific payroll details
+async function initializePayrollReviewsForEmployees(payrollRunId, companyId, payrollDetailIds) {
+  try {
+    // Get all active reviewers for the company
+    const { data: reviewers, error: revError } = await supabase
+      .from("company_reviewers")
+      .select("id, reviewer_level")
+      .eq("company_id", companyId)
+      .order("reviewer_level", { ascending: true });
+
+    if (revError) throw revError;
+    if (!reviewers || reviewers.length === 0) return;
+
+    // Prepare review entries
+    const reviewEntries = [];
+    payrollDetailIds.forEach((detailId) => {
+      reviewers.forEach((reviewer) => {
+        reviewEntries.push({
+          payroll_detail_id: detailId,
+          company_reviewer_id: reviewer.id,
+          status: "PENDING",
+        });
+      });
+    });
+
+    // Batch insert
+    if (reviewEntries.length > 0) {
+      const { error: insertError } = await supabase
+        .from("payroll_reviews")
+        .insert(reviewEntries);
+
+      if (insertError) throw insertError;
+    }
+  } catch (error) {
+    console.error("Failed to initialize payroll reviews:", error);
+    throw error;
+  }
+}
 // Keep other functions but update references
 export const completePayrollRun = async (req, res) => {
   const { payrollRunId } = req.params;
@@ -1228,13 +1406,13 @@ export const bulkUpdateReviewStatus = async (req, res) => {
         status: status,
         reviewed_at: new Date().toISOString(),
       })
-      .in("id", reviewIds)
+      .in("id", reviewIds);
 
     if (error) throw error;
 
     res.json({
-  message: `Successfully updated ${reviewIds.length} item(s).`,
-});
+      message: `Successfully updated ${reviewIds.length} item(s).`,
+    });
   } catch (error) {
     console.error("Bulk update error:", error);
     res.status(500).json({ error: "Bulk update failed" });
