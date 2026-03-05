@@ -544,6 +544,16 @@ export const updateEmployee = async (req, res) => {
       });
     }
 
+     // Validate ALL UUID fields - convert empty strings to null
+    const sanitizedEmployeeData = {
+      ...employeeData,
+      department_id: employeeData.department_id === "" ? null : employeeData.department_id,
+      sub_department_id: employeeData.sub_department_id === "" ? null : employeeData.sub_department_id,
+      job_title_id: employeeData.job_title_id === "" ? null : employeeData.job_title_id,
+      reports_to: employeeData.reports_to === "" ? null : employeeData.reports_to,
+      // Add any other UUID fields that might exist
+    };
+
     // Get current employee data for comparison and audit
     const { data: currentEmployee, error: fetchError } = await supabase
       .from("employees")
@@ -560,33 +570,33 @@ export const updateEmployee = async (req, res) => {
     const companyUser = await getCurrentCompanyUser(userId, companyId);
 
     // Check if salary changed
-    if (currentEmployee.salary !== employeeData.salary) {
+    if (currentEmployee.salary !== sanitizedEmployeeData.salary) {
       await supabase.from("employee_salary_history").insert({
         employee_id: employeeId,
-        salary: employeeData.salary,
-        effective_date: employeeData.salary_effective_date || new Date().toISOString().split('T')[0],
+        salary: sanitizedEmployeeData.salary,
+        effective_date: sanitizedEmployeeData.salary_effective_date || new Date().toISOString().split('T')[0],
         changed_by: companyUser.id,
-        reason: employeeData.salary_change_reason || "Salary update",
-        notes: employeeData.salary_change_notes || null,
+        reason: sanitizedEmployeeData.salary_change_reason || "Salary update",
+        notes: sanitizedEmployeeData.salary_change_notes || null,
       });
     }
 
     // Check if status changed
-    if (currentEmployee.employee_status !== employeeData.employee_status) {
+    if (currentEmployee.employee_status !== sanitizedEmployeeData.employee_status) {
       await supabase.from("employee_status_history").insert({
         employee_id: employeeId,
-        status: employeeData.employee_status,
-        effective_date: employeeData.employee_status_effective_date || new Date().toISOString().split('T')[0],
+        status: sanitizedEmployeeData.employee_status,
+        effective_date: sanitizedEmployeeData.employee_status_effective_date || new Date().toISOString().split('T')[0],
         changed_by: companyUser.id,
-        reason: employeeData.status_change_reason || "Status change",
-        notes: employeeData.status_change_notes || null,
+        reason: sanitizedEmployeeData.status_change_reason || "Status change",
+        notes: sanitizedEmployeeData.status_change_notes || null,
       });
     }
 
     // Update the employee
     const { data: updatedEmployee, error: updateError } = await supabase
       .from("employees")
-      .update(employeeData)
+      .update(sanitizedEmployeeData)
       .eq("id", employeeId)
       .eq("company_id", companyId)
       .select()
