@@ -87,16 +87,17 @@ const isEmployeeActiveDuringPeriod = (employee, payrollMonth, payrollYear) => {
 
 // --- Statutory Calculation Functions ---
 const calculatePAYE = (taxableIncome, isDisabled = false) => {
-  let annualTaxableIncome = taxableIncome * 12;
-  let annualTax = 0;
+  // Apply disability exemption monthly (150,000 per month)
+  let monthlyTaxableIncome = taxableIncome;
 
   // Apply disability exemption if applicable (annual)
   if (isDisabled) {
-    annualTaxableIncome = Math.max(
-      0,
-      annualTaxableIncome - DISABILITY_EXEMPTION,
-    );
+    monthlyTaxableIncome = Math.max(0, taxableIncome - DISABILITY_EXEMPTION);
   }
+
+  // Convert to annual for band calculations
+  let annualTaxableIncome = monthlyTaxableIncome * 12;
+  let annualTax = 0;
 
   // Monthly bands
   if (annualTaxableIncome <= 288000) {
@@ -169,6 +170,26 @@ const calculateNSSF = (
     tier2: tier2_deduction,
     total: tier1_deduction + tier2_deduction,
   };
+};
+
+// Helper function to safely get HELB deduction
+const getHelbDeduction = (employee) => {
+  if (!employee.pays_helb || !employee.helb_accounts) return 0;
+
+  // If it's an array
+  if (Array.isArray(employee.helb_accounts)) {
+    const activeHelb = employee.helb_accounts.find(
+      (a) => a.status === "ACTIVE",
+    );
+    return activeHelb ? parseFloat(activeHelb.monthly_deduction) : 0;
+  }
+
+  // If it's a single object
+  if (employee.helb_accounts.status === "ACTIVE") {
+    return parseFloat(employee.helb_accounts.monthly_deduction);
+  }
+
+  return 0;
 };
 
 const calculateSHIF = (grossSalary, payrollYear, payrollMonth) => {
@@ -307,7 +328,8 @@ export const syncPayroll = async (req, res) => {
       // First, get all payroll details for this run
       const { data: existingDetails } = await supabase
         .from("payroll_details")
-        .select(`
+        .select(
+          `
           id,
           employee_id,
           basic_salary,
@@ -322,17 +344,18 @@ export const syncPayroll = async (req, res) => {
             status,
             company_reviewer_id
           )
-        `)
+        `,
+        )
         .eq("payroll_run_id", payrollRunId);
 
-       if (existingDetails) {
-        existingDetails.forEach(detail => {
+      if (existingDetails) {
+        existingDetails.forEach((detail) => {
           existingDetailsMap.set(detail.employee_id, detail);
-          
+
           // Store reviews by employee and reviewer
           if (detail.payroll_reviews) {
             const reviewsByReviewer = new Map();
-            detail.payroll_reviews.forEach(review => {
+            detail.payroll_reviews.forEach((review) => {
               reviewsByReviewer.set(review.company_reviewer_id, review);
             });
             existingReviewsMap.set(detail.employee_id, reviewsByReviewer);
@@ -498,11 +521,12 @@ export const syncPayroll = async (req, res) => {
     };
 
     for (const employee of eligibleEmployees) {
-       // Remove from delete set since this employee is still eligible
+      // Remove from delete set since this employee is still eligible
       payrollDetailsToDelete.delete(employee.id);
 
       // Get employee type from contract
       const employeeType = employee.employee_type || "Primary Employee";
+      const isSecondary = employeeType === "Secondary Employee";
       const isDisabled = employee.has_disability || false;
 
       // Basic salary
@@ -665,6 +689,9 @@ export const syncPayroll = async (req, res) => {
       let postTaxDeductions = 0;
       let deductionsDetails = [];
       let insurancePremium = 0;
+      let pensionDeduction = 0;
+      let hasPensionDeduction = false;
+      let insuranceRelief = 0;
 
       const employeeDeductions = allDeductions.filter(
         (d) =>
@@ -673,6 +700,14 @@ export const syncPayroll = async (req, res) => {
             d.department_id === employee.department_id) ||
           d.applies_to === "COMPANY",
       );
+
+      // Calculate HELB deduction
+      // Then use it
+      let helbDeduction = getHelbDeduction(employee);
+      console.log(
+        `HELB deduction for ${employee.first_name}: ${helbDeduction}`,
+      );
+      postTaxDeductions += helbDeduction;
 
       for (const deduction of employeeDeductions) {
         let deductionValue = 0;
@@ -695,22 +730,31 @@ export const syncPayroll = async (req, res) => {
         const deductionCode = deduction.deduction_types.code;
         const isPreTax = deduction.deduction_types.is_pre_tax;
 
-        // Track insurance premium for relief (from any insurance-related deductions)
-        if (
-          deductionCode === "INS" ||
-          deductionCode === "PRMF" ||
-          deduction.deduction_types.name.toLowerCase().includes("insurance")
-        ) {
-          insurancePremium += deductionValue;
-        }
+        // Track PENSION deduction separately for limit calculation
+        if (deductionCode === "PENSION") {
+          pensionDeduction = deductionValue;
+          hasPensionDeduction = true;
+          // Don't add to preTaxDeductions yet - we'll do it after limit check
+        } else {
+          // Handle other deductions normally
+          if (!isSecondary) {
+            if (
+              deductionCode === "INS" ||
+              deductionCode === "PRMF" ||
+              deduction.deduction_types.name.toLowerCase().includes("insurance")
+            ) {
+              insurancePremium += deductionValue;
+            }
+          }
 
-        // For actual deductions (not just relief tracking)
-        if (deductionCode !== "INS") {
-          // Exclude INS from actual deductions if it's just for relief
-          if (isPreTax) {
-            preTaxDeductions += deductionValue;
-          } else {
-            postTaxDeductions += deductionValue;
+          // For actual deductions (not just relief tracking)
+          if (deductionCode !== "INS") {
+            // Exclude INS from actual deductions if it's just for relief
+            if (isPreTax) {
+              preTaxDeductions += deductionValue;
+            } else {
+              postTaxDeductions += deductionValue;
+            }
           }
         }
 
@@ -723,38 +767,74 @@ export const syncPayroll = async (req, res) => {
         });
       }
 
-      // Calculate HELB deduction
-      let helbDeduction = 0;
-      if (employee.pays_helb && employee.helb_accounts?.length > 0) {
-        const activeHelb = employee.helb_accounts.find(
-          (a) => a.status === "ACTIVE",
-        );
-        if (activeHelb) {
-          helbDeduction = parseFloat(activeHelb.monthly_deduction);
+      // Apply PENSION + NSSF combined limit (30,000)
+      if (hasPensionDeduction) {
+        const totalPensionNssf = nssfResult.total + pensionDeduction;
+
+        if (totalPensionNssf > 30000) {
+          // Calculate excess and adjust pension deduction
+          const excess = totalPensionNssf - 30000;
+          const adjustedPension = pensionDeduction - excess;
+
+          // Find and update the pension deduction in deductionsDetails
+          const pensionDetail = deductionsDetails.find(
+            (d) => d.code === "PENSION",
+          );
+          if (pensionDetail) {
+            pensionDetail.value = adjustedPension;
+            pensionDetail.original_value = pensionDeduction; // Optional: track original
+            pensionDetail.is_capped = true;
+          }
+
+          // Use adjusted pension for calculations
+          pensionDeduction = adjustedPension;
+
+          // Optional: Log for audit trail
+          console.log(
+            `PENSION capped for employee ${employee.id}: Original ${pensionDeduction + excess}, Adjusted ${adjustedPension}, NSSF: ${nssfResult.total}`,
+          );
         }
+
+        // Add the (potentially adjusted) pension to pre-tax deductions
+        preTaxDeductions += pensionDeduction;
       }
-      postTaxDeductions += helbDeduction;
 
-      // Calculate taxable income
-      let taxableIncome =
-        totalGrossPay -
-        nssfResult.total -
-        shifDeduction -
-        housingLevyDeduction -
-        preTaxDeductions;
+      let taxableIncome;
 
-      // Calculate PAYE with disability exemption
-      let payeTax = employee.pays_paye
-        ? calculatePAYE(taxableIncome, isDisabled)
-        : 0;
+      if (isSecondary) {
+        // Secondary employees: Taxable income = Total Gross Pay (no deductions)
+        taxableIncome = totalGrossPay - preTaxDeductions;
+      } else {
+        // Primary employees: Normal calculation with deductions
+        taxableIncome =
+          totalGrossPay -
+          nssfResult.total -
+          shifDeduction -
+          housingLevyDeduction -
+          preTaxDeductions;
+      }
 
-      // Calculate insurance relief (15% of premium, capped at 5000)
-      let insuranceRelief = Math.min(
-        insurancePremium * 0.15,
-        INSURANCE_RELIEF_CAP,
-      );
-      insuranceRelief = Math.round(insuranceRelief);
-      payeTax = Math.max(0, payeTax - insuranceRelief);
+      // Calculate PAYE
+      let payeTax;
+
+      if (isSecondary) {
+        // Secondary employees: 30% flat rate on taxable income
+        // No disability exemption, no personal relief, no insurance relief
+        payeTax = Math.ceil(taxableIncome * 0.3);
+      } else {
+        // Primary employees: Normal progressive PAYE with reliefs
+        payeTax = employee.pays_paye
+          ? calculatePAYE(taxableIncome, isDisabled)
+          : 0;
+
+        // Calculate insurance relief (15% of premium, capped at 5000) - only for primary
+        insuranceRelief = Math.min(
+          insurancePremium * 0.15,
+          INSURANCE_RELIEF_CAP,
+        );
+        insuranceRelief = Math.round(insuranceRelief);
+        payeTax = Math.max(0, payeTax - insuranceRelief);
+      }
 
       // Calculate total deductions and net pay
       let totalStatutoryDeductions =
@@ -766,7 +846,7 @@ export const syncPayroll = async (req, res) => {
       const paymentDetails = employee.employee_payment_details || {};
 
       // Prepare payroll detail record
-       const payrollDetail = {
+      const payrollDetail = {
         id: uuidv4(),
         payroll_run_id: payrollRunId,
         employee_id: employee.id,
@@ -806,26 +886,33 @@ export const syncPayroll = async (req, res) => {
 
       // Check if this employee had existing payroll details
       const existingDetail = existingDetailsMap.get(employee.id);
-      
+
       if (existingDetail) {
         // Compare key values to see if anything changed
-        const hasChanged = 
+        const hasChanged =
           existingDetail.basic_salary !== payrollDetail.basic_salary ||
-          existingDetail.total_cash_allowances !== payrollDetail.total_cash_allowances ||
-          existingDetail.total_non_cash_benefits !== payrollDetail.total_non_cash_benefits ||
+          existingDetail.total_cash_allowances !==
+            payrollDetail.total_cash_allowances ||
+          existingDetail.total_non_cash_benefits !==
+            payrollDetail.total_non_cash_benefits ||
           existingDetail.gross_pay !== payrollDetail.gross_pay ||
           existingDetail.net_pay !== payrollDetail.net_pay ||
-          JSON.stringify(existingDetail.allowances_details) !== JSON.stringify(payrollDetail.allowances_details) ||
-          JSON.stringify(existingDetail.deductions_details) !== JSON.stringify(payrollDetail.deductions_details);
+          JSON.stringify(existingDetail.allowances_details) !==
+            JSON.stringify(payrollDetail.allowances_details) ||
+          JSON.stringify(existingDetail.deductions_details) !==
+            JSON.stringify(payrollDetail.deductions_details);
 
         if (hasChanged) {
           // If changed, mark for update and include existing ID
           payrollDetail.id = existingDetail.id;
           payrollDetailsToUpdate.push(payrollDetail);
-          
+
           // Reset reviews for this employee if something changed
           if (existingReviewsMap.has(employee.id)) {
-            await resetEmployeeReviews(existingDetail.id, existingReviewsMap.get(employee.id));
+            await resetEmployeeReviews(
+              existingDetail.id,
+              existingReviewsMap.get(employee.id),
+            );
           }
         }
         // If no change, keep existing data and don't modify
@@ -848,7 +935,7 @@ export const syncPayroll = async (req, res) => {
     // 8. Handle deletions (employees no longer eligible)
     if (payrollDetailsToDelete.size > 0) {
       const deleteEmployeeIds = Array.from(payrollDetailsToDelete);
-      
+
       // Get payroll detail IDs to delete
       const { data: detailsToDelete } = await supabase
         .from("payroll_details")
@@ -857,8 +944,8 @@ export const syncPayroll = async (req, res) => {
         .in("employee_id", deleteEmployeeIds);
 
       if (detailsToDelete && detailsToDelete.length > 0) {
-        const detailIdsToDelete = detailsToDelete.map(d => d.id);
-        
+        const detailIdsToDelete = detailsToDelete.map((d) => d.id);
+
         // Delete reviews first
         const { error: deleteReviewsError } = await supabase
           .from("payroll_reviews")
@@ -876,7 +963,6 @@ export const syncPayroll = async (req, res) => {
         if (deleteDetailsError) throw deleteDetailsError;
       }
     }
-
 
     // 8. Insert all payroll details
     if (payrollDetailsToInsert.length > 0) {
@@ -913,12 +999,12 @@ export const syncPayroll = async (req, res) => {
 
     if (updateError) throw updateError;
 
-     // 12. Initialize reviews for new employees
+    // 12. Initialize reviews for new employees
     if (payrollDetailsToInsert.length > 0) {
       await initializePayrollReviewsForEmployees(
-        payrollRunId, 
-        companyId, 
-        payrollDetailsToInsert.map(d => d.id)
+        payrollRunId,
+        companyId,
+        payrollDetailsToInsert.map((d) => d.id),
       );
     }
 
@@ -933,12 +1019,15 @@ export const syncPayroll = async (req, res) => {
       payrollRunId,
       isNewRun,
       totals,
-       stats: {
+      stats: {
         inserted: payrollDetailsToInsert.length,
         updated: payrollDetailsToUpdate.length,
         deleted: payrollDetailsToDelete.size,
-        unchanged: existingDetailsMap.size - payrollDetailsToUpdate.length - payrollDetailsToDelete.size
-      }
+        unchanged:
+          existingDetailsMap.size -
+          payrollDetailsToUpdate.length -
+          payrollDetailsToDelete.size,
+      },
     });
   } catch (error) {
     await supabase.rpc("rollback_transaction");
@@ -953,11 +1042,11 @@ export const syncPayroll = async (req, res) => {
 // Helper function to reset reviews for an employee when data changes
 async function resetEmployeeReviews(payrollDetailId, existingReviews) {
   if (!existingReviews || existingReviews.size === 0) return;
-  
+
   // Only reset APPROVED or REJECTED reviews back to PENDING
   const reviewIdsToReset = [];
   existingReviews.forEach((review, reviewerId) => {
-    if (review.status !== 'PENDING') {
+    if (review.status !== "PENDING") {
       reviewIdsToReset.push(review.id);
     }
   });
@@ -966,8 +1055,8 @@ async function resetEmployeeReviews(payrollDetailId, existingReviews) {
     const { error } = await supabase
       .from("payroll_reviews")
       .update({
-        status: 'PENDING',
-        reviewed_at: null
+        status: "PENDING",
+        reviewed_at: null,
       })
       .in("id", reviewIdsToReset);
 
@@ -979,7 +1068,11 @@ async function resetEmployeeReviews(payrollDetailId, existingReviews) {
 }
 
 // Helper function to initialize reviews for specific payroll details
-async function initializePayrollReviewsForEmployees(payrollRunId, companyId, payrollDetailIds) {
+async function initializePayrollReviewsForEmployees(
+  payrollRunId,
+  companyId,
+  payrollDetailIds,
+) {
   try {
     // Get all active reviewers for the company
     const { data: reviewers, error: revError } = await supabase
