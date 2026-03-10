@@ -854,9 +854,9 @@ export const syncPayroll = async (req, res) => {
       let payeTax;
 
       if (isSecondary) {
-        // Secondary employees: 30% flat rate on taxable income
+        // Secondary employees: 35% flat rate on taxable income
         // No disability exemption, no personal relief, no insurance relief
-        payeTax = parseFloat((taxableIncome * 0.3).toFixed(2));
+        payeTax = parseFloat((taxableIncome * 0.35).toFixed(2));
       } else {
         // Primary employees: Normal progressive PAYE with reliefs
         payeTax = employee.pays_paye
