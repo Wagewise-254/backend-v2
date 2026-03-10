@@ -175,6 +175,7 @@ export const getPayrollReportData = async (req, res) => {
         data: reports,
         columns: topAllowanceNames,
       });
+      //console.log(reports)
     } else {
       // Return just the array for other views
       res.json(reports);

@@ -1,5 +1,6 @@
 // backend/controllers/payrollController.js
 import supabase from "../libs/supabaseAdmin.js";
+import { PAYROLL_STATUS } from "../constants/payrollStatus.js";
 import { v4 as uuidv4 } from "uuid";
 
 // --- Constants ---
@@ -95,38 +96,33 @@ const calculatePAYE = (taxableIncome, isDisabled = false) => {
     monthlyTaxableIncome = Math.max(0, taxableIncome - DISABILITY_EXEMPTION);
   }
 
-  // Convert to annual for band calculations
-  let annualTaxableIncome = monthlyTaxableIncome * 12;
-  let annualTax = 0;
+  let tax = 0;
 
   // Monthly bands
-  if (annualTaxableIncome <= 288000) {
-    // 24,000 * 12
-    annualTax = annualTaxableIncome * 0.1;
-  } else if (annualTaxableIncome <= 388000) {
-    // 32,333 * 12
-    annualTax = 28800 + (annualTaxableIncome - 288000) * 0.25;
-  } else if (annualTaxableIncome <= 6000000) {
-    // 500,000 * 12
-    annualTax = 28800 + 25000 + (annualTaxableIncome - 388000) * 0.3;
-  } else if (annualTaxableIncome <= 9600000) {
-    // 800,000 * 12
-    annualTax =
-      28800 + 25000 + 1683600 + (annualTaxableIncome - 6000000) * 0.325;
+  if (monthlyTaxableIncome <= 24000) {
+    tax = monthlyTaxableIncome * 0.1;
+  } else if (monthlyTaxableIncome <= 32333) {
+    tax = 24000 * 0.1 + (monthlyTaxableIncome - 24000) * 0.25;
+  } else if (monthlyTaxableIncome <= 500000) {
+    tax = 24000 * 0.1 + 8333 * 0.25 + (monthlyTaxableIncome - 32333) * 0.3;
+  } else if (monthlyTaxableIncome <= 800000) {
+    tax =
+      24000 * 0.1 +
+      8333 * 0.25 +
+      467667 * 0.3 +
+      (monthlyTaxableIncome - 500000) * 0.325;
   } else {
-    annualTax =
-      28800 +
-      25000 +
-      1683600 +
-      1170000 +
-      (annualTaxableIncome - 9600000) * 0.35;
+    tax =
+      24000 * 0.1 +
+      8333 * 0.25 +
+      467667 * 0.3 +
+      300000 * 0.325 +
+      (monthlyTaxableIncome - 800000) * 0.35;
   }
 
-  // Convert to monthly and apply personal relief
-  let monthlyTax = annualTax / 12;
-  let finalTax = monthlyTax - PERSONAL_RELIEF;
-
-  return Math.ceil(Math.max(0, finalTax));
+  // Apply personal relief
+  const finalTax = tax - PERSONAL_RELIEF;
+  return parseFloat(Math.max(0, finalTax).toFixed(2));
 };
 
 const calculateNSSF = (
@@ -280,6 +276,20 @@ export const syncPayroll = async (req, res) => {
       .eq("payroll_year", payrollYear)
       .maybeSingle();
 
+    // In syncPayroll function, after fetching existingRun
+    if (existingRun) {
+      const blockedStatuses = [
+        PAYROLL_STATUS.APPROVED,
+        PAYROLL_STATUS.LOCKED,
+        PAYROLL_STATUS.PAID,
+      ];
+      if (blockedStatuses.includes(existingRun.status)) {
+        return res.status(403).json({
+          error: `Cannot resync payroll with status: ${existingRun.status}`,
+          message: `Payroll runs that are ${existingRun.status.toLowerCase()} cannot be modified.`,
+        });
+      }
+    }
     let payrollRunId = existingRun?.id;
     const isNewRun = !existingRun;
 
@@ -767,36 +777,62 @@ export const syncPayroll = async (req, res) => {
         });
       }
 
+      // Now calculate preTaxDeductions for taxable income with the 30k combined limit
+      let combinedPensionNssf = nssfResult.total + pensionDeduction;
+
       // Apply PENSION + NSSF combined limit (30,000)
       if (hasPensionDeduction) {
-        const totalPensionNssf = nssfResult.total + pensionDeduction;
-
-        if (totalPensionNssf > 30000) {
-          // Calculate excess and adjust pension deduction
-          const excess = totalPensionNssf - 30000;
-          const adjustedPension = pensionDeduction - excess;
-
-          // Find and update the pension deduction in deductionsDetails
-          const pensionDetail = deductionsDetails.find(
-            (d) => d.code === "PENSION",
-          );
-          if (pensionDetail) {
-            pensionDetail.value = adjustedPension;
-            pensionDetail.original_value = pensionDeduction; // Optional: track original
-            pensionDetail.is_capped = true;
-          }
-
-          // Use adjusted pension for calculations
-          pensionDeduction = adjustedPension;
-
-          // Optional: Log for audit trail
+        if (combinedPensionNssf > 30000) {
+          // Combined amount exceeds 30k, cap at 30k for taxable income calculation
+          // But keep the full pension amount in deductionsDetails
           console.log(
-            `PENSION capped for employee ${employee.id}: Original ${pensionDeduction + excess}, Adjusted ${adjustedPension}, NSSF: ${nssfResult.total}`,
+            `PENSION + NSSF exceeds 30k for employee ${employee.id}: Combined ${combinedPensionNssf}, Using cap of 30000 for taxable income`,
           );
-        }
 
-        // Add the (potentially adjusted) pension to pre-tax deductions
-        preTaxDeductions += pensionDeduction;
+          // For taxable income, use the capped amount
+          // We need to distribute the 30k between NSSF and pension proportionally
+          // or just use 30k as the total deduction
+          const cappedCombined = 30000;
+
+          // Calculate preTaxDeductions without including pension (we'll handle it separately)
+          for (const detail of deductionsDetails) {
+            if (detail.code === "PENSION") {
+              // Skip pension for now, we'll handle it with the cap
+              continue;
+            }
+            if (detail.is_pre_tax && detail.code !== "PENSION") {
+              preTaxDeductions += detail.value;
+            }
+          }
+          // Add the capped combined amount (instead of NSSF + full pension)
+          // We subtract NSSF that's already accounted for in taxable income calculation
+          // since taxable income already subtracts NSSF separately
+          preTaxDeductions += cappedCombined - nssfResult.total;
+
+          // Add a note in deductions about the cap for audit trail
+          deductionsDetails.push({
+            code: "PENSION_NSSF_CAP",
+            name: "Pension/NSSF Combined Limit",
+            value: combinedPensionNssf - 30000, // The excess amount that was not deducted
+            is_pre_tax: false,
+            is_cap_note: true,
+            note: `Combined pension and NSSF exceeded 30,000. Excess of ${(combinedPensionNssf - 30000).toFixed(2)} not deducted for tax purposes.`,
+          });
+        } else {
+          // Under the limit, include full pension in pre-tax deductions
+          for (const detail of deductionsDetails) {
+            if (detail.is_pre_tax) {
+              preTaxDeductions += detail.value;
+            }
+          }
+        }
+      } else {
+        // No pension, just use NSSF amount (already handled separately)
+        for (const detail of deductionsDetails) {
+          if (detail.is_pre_tax) {
+            preTaxDeductions += detail.value;
+          }
+        }
       }
 
       let taxableIncome;
@@ -820,7 +856,7 @@ export const syncPayroll = async (req, res) => {
       if (isSecondary) {
         // Secondary employees: 30% flat rate on taxable income
         // No disability exemption, no personal relief, no insurance relief
-        payeTax = Math.ceil(taxableIncome * 0.3);
+        payeTax = parseFloat((taxableIncome * 0.3).toFixed(2));
       } else {
         // Primary employees: Normal progressive PAYE with reliefs
         payeTax = employee.pays_paye
@@ -832,14 +868,19 @@ export const syncPayroll = async (req, res) => {
           insurancePremium * 0.15,
           INSURANCE_RELIEF_CAP,
         );
-        insuranceRelief = Math.round(insuranceRelief);
-        payeTax = Math.max(0, payeTax - insuranceRelief);
+        insuranceRelief = parseFloat(insuranceRelief.toFixed(2));
+        payeTax = parseFloat(Math.max(0, payeTax - insuranceRelief).toFixed(2));
       }
 
       // Calculate total deductions and net pay
       let totalStatutoryDeductions =
         nssfResult.total + shifDeduction + housingLevyDeduction + payeTax;
       let totalDeductions = totalStatutoryDeductions + postTaxDeductions;
+
+      // If there's pension, add the FULL pension amount to total deductions
+      if (hasPensionDeduction) {
+        totalDeductions += pensionDeduction; // Use full pension for total deductions
+      }
       let netPay = totalGrossPay - totalDeductions;
 
       // Get payment details
@@ -1175,37 +1216,93 @@ export const completePayrollRun = async (req, res) => {
 
 export const getPayrollRuns = async (req, res) => {
   const { companyId } = req.params;
-  const { exclude, limit, month, year, sort } = req.query;
+  const { 
+    page = 1, 
+    limit = 10, 
+    status, 
+    year, 
+    search,
+    month 
+  } = req.query;
 
   try {
-    const { data, error } = await supabase
-      .from("payroll_runs")
-      .select(
-        `
+    let query = supabase
+      .from('payroll_runs')
+      .select(`
         *,
-        payroll_details (
+         payroll_details!inner (
           id,
           employee_id,
           gross_pay,
           net_pay
         )
-      `,
-      )
+      `, { count: 'exact' })
       .eq("company_id", companyId)
-      .order("payroll_year", { ascending: false })
-      .order("payroll_month", { ascending: false });
 
-    if (error) throw new Error("Failed to fetch payroll runs.");
+    // Apply filters
+    if (status && status !== 'all') {
+      query = query.eq('status', status);
+    }
 
-    // Add employee count
-    const runsWithCounts = data.map((run) => ({
+    if (year && year !== 'all') {
+      query = query.eq('payroll_year', parseInt(year));
+    }
+
+    if (month) {
+      query = query.eq('payroll_month', month);
+    }
+
+    if (search) {
+      query = query.or(
+        `payroll_number.ilike.%${search}%,` +
+        `payroll_month.ilike.%${search}%`
+      );
+    }
+
+    // Add pagination
+    const from = (parseInt(page) - 1) * parseInt(limit);
+    const to = from + parseInt(limit) - 1;
+    
+    query = query
+      .order('payroll_year', { ascending: false })
+      .order('payroll_month', { ascending: false })
+      .range(from, to);
+
+    const { data, error, count } = await query;
+
+    if (error) throw error;
+
+    // Transform data
+    const runsWithCounts = data.map(run => ({
       ...run,
       employee_count: run.payroll_details?.length || 0,
-      payroll_details: undefined, // Remove details from response
+      payroll_details: undefined
     }));
 
-    res.status(200).json(runsWithCounts);
+    // If it's a request for checking existing run (no pagination needed), return array
+    if (month) {
+      return res.status(200).json(runsWithCounts);
+    }
+
+    // Get unique years for filter
+    const { data: yearsData } = await supabase
+      .from('payroll_runs')
+      .select('payroll_year')
+      .eq('company_id', companyId)
+      .order('payroll_year', { ascending: false });
+
+    const availableYears = [...new Set(yearsData?.map(y => y.payroll_year) || [])];
+
+    res.status(200).json({
+      data: runsWithCounts,
+      totalItems: count,
+      totalPages: Math.ceil(count / limit),
+      currentPage: parseInt(page),
+      availableYears
+    });
+    
   } catch (err) {
+    console.error('Get payroll runs error:', err);
     res.status(500).json({ error: err.message });
   }
 };
@@ -1343,7 +1440,6 @@ export const initializePayrollReviews = async (payrollRunId, companyId) => {
   }
 };
 
-// Get summary of review progress for a payroll run
 // Get summary of review progress for a payroll run
 export const getPayrollReviewStatus = async (req, res) => {
   const { runId, companyId } = req.params;
@@ -1582,7 +1678,7 @@ export const getPayrollRun = async (req, res) => {
 // Update payroll status with validation
 export const updatePayrollStatus = async (req, res) => {
   const { runId } = req.params;
-  const { status } = req.body;
+  const { status, reason } = req.body;
   const userId = req.userId;
   const currentStatus = req.payrollStatus;
 
@@ -1625,14 +1721,19 @@ export const updatePayrollStatus = async (req, res) => {
 
     if (error) throw error;
 
-    // Log the status change
-    await supabase.from("audit_logs").insert({
-      entity_type: "payroll_run",
-      entity_id: runId,
-      action: "UPDATE",
-      performed_by: userId,
-      new_data: { status, previous_status: currentStatus },
-      created_at: new Date().toISOString(),
+    // Enhanced audit log with reason
+    await createAuditLog({
+      entityType: 'payroll_run',
+      entityId: runId,
+      action: status === 'REJECTED' ? 'REJECT' : 'STATUS_CHANGE',
+      performedBy: userId,
+      oldData: { status: currentStatus },
+      newData: { 
+        status, 
+        previous_status: currentStatus,
+        reason: reason || null,  // Include reason if provided
+        timestamp: new Date().toISOString()
+      }
     });
 
     res.status(200).json(data);
@@ -1752,5 +1853,79 @@ export const deletePayrollRun = async (req, res) => {
   } catch (error) {
     console.error("Delete payroll run error:", error);
     res.status(500).json({ error: "Failed to delete payroll run." });
+  }
+};
+
+export const revertPayrollStatus = async (req, res) => {
+  const { runId } = req.params;
+  const { targetStatus, reason } = req.body;
+  const userId = req.userId;
+  
+  try {
+    // Fetch current payroll run
+    const { data: payrollRun, error: fetchError } = await supabase
+      .from('payroll_runs')
+      .select('*')
+      .eq('id', runId)
+      .single();
+    
+    if (fetchError) throw fetchError;
+    
+    // Define allowed reverts
+    const revertRules = {
+      [PAYROLL_STATUS.APPROVED]: [PAYROLL_STATUS.DRAFT, PAYROLL_STATUS.UNDER_REVIEW],
+      [PAYROLL_STATUS.LOCKED]: [PAYROLL_STATUS.APPROVED, PAYROLL_STATUS.DRAFT],
+      [PAYROLL_STATUS.PAID]: [], // No revert from PAID
+      [PAYROLL_STATUS.UNDER_REVIEW]: [PAYROLL_STATUS.DRAFT],
+      [PAYROLL_STATUS.REJECTED]: [PAYROLL_STATUS.DRAFT]
+    };
+    
+    // Check if revert is allowed
+    if (!revertRules[payrollRun.status]?.includes(targetStatus)) {
+      return res.status(403).json({ 
+        error: `Cannot revert from ${payrollRun.status} to ${targetStatus}` 
+      });
+    }
+    
+    // Perform the revert
+    const { data: updated, error: updateError } = await supabase
+      .from('payroll_runs')
+      .update({
+        status: targetStatus,
+        updated_at: new Date().toISOString(),
+        ...(targetStatus === PAYROLL_STATUS.DRAFT && { 
+          locked_at: null, 
+          locked_by: null 
+        })
+      })
+      .eq('id', runId)
+      .select()
+      .single();
+    
+    if (updateError) throw updateError;
+    
+    // Enhanced audit log for revert with reason
+    await createAuditLog({
+      entityType: 'payroll_run',
+      entityId: runId,
+      action: 'REVERT',
+      performedBy: userId,
+      oldData: { status: payrollRun.status },
+      newData: { 
+        status: targetStatus, 
+        previous_status: payrollRun.status,
+        reason: reason || 'No reason provided',
+        timestamp: new Date().toISOString()
+      }
+    });
+    
+    res.json({ 
+      message: `Payroll reverted to ${targetStatus} successfully`,
+      data: updated 
+    });
+    
+  } catch (error) {
+    console.error('Revert error:', error);
+    res.status(500).json({ error: 'Failed to revert payroll status' });
   }
 };

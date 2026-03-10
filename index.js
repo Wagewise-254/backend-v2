@@ -1,6 +1,8 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import cron from 'node-cron';
+import { cleanupExpiredCodes } from './utils/cleanupJobs.js';
 import workspaceRouters from './routes/workspaceRoutes.js';
 import companyRoutes from './routes/companyRoutes.js';
 import companyUsersRoutes from './routes/companyUsersRoutes.js';
@@ -18,6 +20,7 @@ import reportsRoutes from './routes/reportsRoutes.js';
 import payslipRoutes from './routes/payslipRoutes.js';
 import p9aRoutes from './routes/p9aRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
+import authRoutes from './routes/authRoutes.js';
 
 dotenv.config();
 
@@ -33,6 +36,14 @@ app.get('/api/ping', (req, res) => {
   console.log('Ping received at', new Date().toISOString());
   res.status(200).json({ message: 'pong', time: new Date().toISOString() });
 });
+
+app.use('/api', authRoutes);
+// Schedule cleanup job to run every hour
+cron.schedule('0 * * * *', () => {
+  console.log('Running cleanup for expired recovery codes...');
+  cleanupExpiredCodes();
+});
+
 
 app.use('/api', workspaceRouters)
 app.use('/api', bankRoutes)

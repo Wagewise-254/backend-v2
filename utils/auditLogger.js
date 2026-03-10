@@ -9,6 +9,12 @@ export const createAuditLog = async ({
   oldData = null,
   newData = null,
 }) => {
+  // Ensure entityId is not null
+  if (!entityId) {
+    console.error('Cannot create audit log: entityId is required', { entityType, action });
+    return;
+  }
+
   const { error } = await supabase.from("audit_logs").insert({
     entity_type: entityType,
     entity_id: entityId,
@@ -16,6 +22,7 @@ export const createAuditLog = async ({
     performed_by: performedBy,
     old_data: oldData,
     new_data: newData,
+    created_at: new Date().toISOString()
   });
 
   if (error) {
