@@ -714,9 +714,10 @@ export const syncPayroll = async (req, res) => {
       // Calculate HELB deduction
       // Then use it
       let helbDeduction = getHelbDeduction(employee);
+      /*
       console.log(
         `HELB deduction for ${employee.first_name}: ${helbDeduction}`,
-      );
+      );*/
       postTaxDeductions += helbDeduction;
 
       for (const deduction of employeeDeductions) {

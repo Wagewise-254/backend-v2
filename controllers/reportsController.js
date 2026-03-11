@@ -236,7 +236,7 @@ const fetchCompanyDetails = async (companyId) => {
 
 //Get Available Years for Annual Report
 export const getAnnualReportYears = async (req, res) => {
-  console.log("Debug code");
+  //console.log("Debug code");
   try {
     const { companyId } = req.params;
 
@@ -247,11 +247,11 @@ export const getAnnualReportYears = async (req, res) => {
     }
 
     // Fetch unique payroll years where the payroll run is 'Completed'
-    const { data, error } = await supabase
+   const { data, error } = await supabase
       .from("payroll_runs")
       .select("payroll_year")
       .eq("company_id", companyId)
-      .eq("status", "APPROVED"); // Only approved runs are useful for the annual report
+      .in("status", ["APPROVED", "LOCKED", "PAID"]); // Only approved runs are useful for the annual report
 
     if (error) {
       console.error("Error fetching annual report years:", error);
@@ -274,7 +274,7 @@ export const getAnnualReportYears = async (req, res) => {
     // This resolves the 500 error caused by the frontend expecting the wrong format.
     res.status(200).json(uniqueYears);
   } catch (error) {
-    console.log("Debug code");
+    //console.log("Debug code");
     console.error("getAnnualReportYears error:", error.message);
     res.status(500).json({
       error:
