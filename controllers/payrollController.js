@@ -1,6 +1,7 @@
 // backend/controllers/payrollController.js
 import supabase from "../libs/supabaseAdmin.js";
 import { PAYROLL_STATUS } from "../constants/payrollStatus.js";
+import { createAuditLog } from '../utils/auditLogger.js';
 import { v4 as uuidv4 } from "uuid";
 
 // --- Constants ---
