@@ -26,7 +26,8 @@ export const generatePayslipPdf = async (req, res) => {
           last_name,      
           krapin,
           nssf_number,
-          shif_number
+          shif_number,
+          employee_type
         ),
         payroll_run:payroll_run_id (
           payroll_month,
@@ -107,7 +108,8 @@ export const emailPayslip = async (req, res) => {
           email,
           krapin,
           nssf_number,
-          shif_number
+          shif_number,
+          employee_type
         ),
         payroll_run:payroll_run_id (
           payroll_month,

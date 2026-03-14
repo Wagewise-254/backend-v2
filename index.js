@@ -3,6 +3,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import cron from 'node-cron';
 import { cleanupExpiredCodes } from './utils/cleanupJobs.js';
+import { 
+  checkPayrollNotifications, 
+  checkContractExpirations,
+  checkMissingEmployeeDetails,
+  cleanupOldNotifications 
+} from './jobs/notificationJobs.js';
 import workspaceRouters from './routes/workspaceRoutes.js';
 import companyRoutes from './routes/companyRoutes.js';
 import companyUsersRoutes from './routes/companyUsersRoutes.js';
@@ -21,6 +27,7 @@ import payslipRoutes from './routes/payslipRoutes.js';
 import p9aRoutes from './routes/p9aRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import authRoutes from './routes/authRoutes.js';
+import notificationRoutes from './routes/notificationRoutes.js';
 
 dotenv.config();
 
@@ -44,9 +51,23 @@ cron.schedule('0 * * * *', () => {
   cleanupExpiredCodes();
 });
 
+// Schedule notification jobs
+cron.schedule('0 8 * * *', () => { // 8 AM daily
+  console.log('Running daily notification checks...');
+  checkPayrollNotifications();
+  checkContractExpirations();
+  checkMissingEmployeeDetails();
+});
+
+cron.schedule('0 2 * * *', () => { // 2 AM daily
+  console.log('Cleaning up old notifications...');
+  cleanupOldNotifications();
+});
+
 
 app.use('/api', workspaceRouters)
 app.use('/api', bankRoutes)
+app.use('/api', notificationRoutes);
 
 app.use('/api/company/:companyId/payroll/runs', reportsRoutes);
 app.use('/api/company/:companyId', payrollRoutes);

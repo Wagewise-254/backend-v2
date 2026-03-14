@@ -17,7 +17,8 @@ import {
     getPayrollReviewStatus,
     updateItemReviewStatus,
      bulkUpdateReviewStatus,
-     revertPayrollStatus
+     revertPayrollStatus,
+     getPayrollReviewSummaries
 } from '../controllers/payrollController.js';
 import verifyToken from '../middleware/verifyToken.js';
 import { checkPayrollAccess } from '../middleware/payrollAccess.js';
@@ -40,6 +41,7 @@ router.get('/payroll/years', getPayrollYears);
 router.patch('/payroll/reviews/:reviewId', updateItemReviewStatus);
 // BULK review updates - Add this new route
 router.post('/payroll/reviews/bulk', bulkUpdateReviewStatus);
+router.post('/payroll/review-summaries', getPayrollReviewSummaries);
 
 // Status management with access control
 router.patch('/payroll/:runId/status', checkPayrollAccess,  auditAction('payroll_run', 'STATUS_CHANGE'),

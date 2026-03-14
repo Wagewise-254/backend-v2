@@ -1,5 +1,6 @@
 // backend/controllers/payrollController.js
-import supabase from "../libs/supabaseAdmin.js";
+import supabase from "../libs/supabaseClient.js";
+import supabaseAdmin from "../libs/supabaseAdmin.js";
 import { PAYROLL_STATUS } from "../constants/payrollStatus.js";
 import { createAuditLog } from '../utils/auditLogger.js';
 import { v4 as uuidv4 } from "uuid";
@@ -139,20 +140,24 @@ const calculateNSSF = (
   // Consultants don't pay NSSF through payroll
   if (employeeType === "Consultant") return { tier1: 0, tier2: 0, total: 0 };
 
-  // Date-based caps
-  if (payrollYear > 2026 || (payrollYear === 2026 && payrollMonthIndex >= 1)) {
-    tier1_cap = 9000;
-    tier2_cap = 108000;
-  } else {
-    tier1_cap = 8000;
-    tier2_cap = 72000;
-  }
-
-  // Adjust caps based on employee type
-  if (employeeType === "SECONDARY") {
-    tier1_cap = Math.min(tier1_cap, 4500);
-    tier2_cap = Math.min(tier2_cap, 45000);
-  }
+// Date-based caps (NSSF Phased Implementation)
+if (payrollYear > 2026 || (payrollYear === 2026 && payrollMonthIndex >= 1)) {
+  // Year 4: Feb 2026 - 
+  tier1_cap = 9000;
+  tier2_cap = 108000;
+} else if (payrollYear > 2025 || (payrollYear === 2025 && payrollMonthIndex >= 1)) {
+  // Year 3: Feb 2025 - Jan 2026
+  tier1_cap = 8000;
+  tier2_cap = 72000;
+} else if (payrollYear > 2024 || (payrollYear === 2024 && payrollMonthIndex >= 1)) {
+  // Year 2: Feb 2024 - Jan 2025
+  tier1_cap = 7000;
+  tier2_cap = 36000;
+} else {
+  // Year 1: Feb 2023 - Jan 2024
+  tier1_cap = 6000;
+  tier2_cap = 18000;
+}
 
   let tier1_deduction = Math.min(pensionablePay, tier1_cap) * nssf_rate;
   let tier2_deduction = 0;
@@ -1306,6 +1311,143 @@ export const getPayrollRuns = async (req, res) => {
   } catch (err) {
     console.error('Get payroll runs error:', err);
     res.status(500).json({ error: err.message });
+  }
+};
+
+
+export const getPayrollReviewSummaries = async (req, res) => {
+  const { companyId } = req.params;
+  const { runIds } = req.body;
+
+  if (!runIds || !Array.isArray(runIds) || runIds.length === 0) {
+    return res.status(400).json({ error: "Invalid or missing run IDs" });
+  }
+
+  if (runIds.length > 50) {
+    return res.status(400).json({ error: "Too many run IDs. Maximum 50 allowed." });
+  }
+
+  try {
+    console.log(`Fetching review summaries for ${runIds.length} runs`);
+
+    // First, verify the connection by doing a simple test query
+    const { error: testError } = await supabase
+      .from('payroll_runs')
+      .select('id')
+      .limit(1);
+
+    if (testError) {
+      console.error("Supabase connection test failed:", testError);
+      throw new Error(`Database connection failed: ${testError.message}`);
+    }
+
+    // Get all payroll details for these runs
+    const { data: payrollDetails, error: detailsError } = await supabase
+      .from('payroll_details')
+      .select('id, payroll_run_id')
+      .in('payroll_run_id', runIds);
+
+    if (detailsError) {
+      console.error("Payroll details error:", detailsError);
+      throw new Error(`Failed to fetch payroll details: ${detailsError.message}`);
+    }
+
+    const payrollDetailIds = payrollDetails?.map(d => d.id) || [];
+    
+    if (payrollDetailIds.length === 0) {
+      return res.json({ summaries: {} });
+    }
+
+    // Get all reviews for these payroll details
+    const { data: reviews, error: reviewsError } = await supabase
+      .from('payroll_reviews')
+      .select('status, payroll_detail_id')
+      .in('payroll_detail_id', payrollDetailIds);
+
+    if (reviewsError) {
+      console.error("Reviews error:", reviewsError);
+      throw new Error(`Failed to fetch reviews: ${reviewsError.message}`);
+    }
+
+    // Group by payroll run
+    const summaries = {};
+    
+    runIds.forEach(runId => {
+      summaries[runId] = {
+        total_employees: 0,
+        approved: 0,
+        pending: 0,
+        rejected: 0,
+        completion_percentage: 0,
+        all_approved: false,
+        any_rejected: false
+      };
+    });
+
+    // Count employees per run
+    payrollDetails.forEach(detail => {
+      if (summaries[detail.payroll_run_id]) {
+        summaries[detail.payroll_run_id].total_employees++;
+      }
+    });
+
+    // Process reviews
+    reviews.forEach(review => {
+      const detail = payrollDetails.find(d => d.id === review.payroll_detail_id);
+      if (detail && summaries[detail.payroll_run_id]) {
+        const runSummary = summaries[detail.payroll_run_id];
+        
+        const status = review.status?.toLowerCase() || '';
+        if (status === 'approved') runSummary.approved++;
+        else if (status === 'rejected') runSummary.rejected++;
+        else if (status === 'pending') runSummary.pending++;
+      }
+    });
+
+    // Calculate completion percentages and status flags
+    Object.keys(summaries).forEach(runId => {
+      const summary = summaries[runId];
+      const totalReviews = summary.approved + summary.rejected + summary.pending;
+      
+      if (totalReviews > 0) {
+        summary.completion_percentage = Math.round(
+          ((summary.approved + summary.rejected) / totalReviews) * 100
+        );
+      } else {
+        summary.completion_percentage = 0;
+      }
+      
+      // Determine overall run status
+      summary.all_approved = summary.pending === 0 && summary.rejected === 0 && summary.approved > 0;
+      summary.any_rejected = summary.rejected > 0;
+    });
+
+    console.log(`Successfully fetched summaries for ${Object.keys(summaries).length} runs`);
+    res.json({ summaries });
+    
+  } catch (error) {
+    console.error("Error in getPayrollReviewSummaries:", {
+      message: error.message,
+      stack: error.stack,
+      companyId,
+      runIdsCount: runIds?.length
+    });
+    
+    // Return empty summaries instead of error to prevent UI from breaking
+    const emptySummaries = {};
+    runIds.forEach(runId => {
+      emptySummaries[runId] = {
+        total_employees: 0,
+        approved: 0,
+        pending: 0,
+        rejected: 0,
+        completion_percentage: 0,
+        all_approved: false,
+        any_rejected: false
+      };
+    });
+    
+    res.json({ summaries: emptySummaries });
   }
 };
 

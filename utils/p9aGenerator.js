@@ -2,7 +2,7 @@
 import PdfPrinter from "pdfmake";
 import fs from "fs";
 import path from "path";
-import { fileURLToPath } from 'url';
+import { fileURLToPath } from "url";
 
 // Helper to get the directory name in ES Modules
 const __filename = fileURLToPath(import.meta.url);
@@ -39,17 +39,28 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
           italics: path.join(fontsDir, "Georgia-Italic.TTF"),
           bolditalics: path.join(fontsDir, "Georgia-BoldItalic.TTF"),
         },
+        // Add a smaller font option
+        Roboto: {
+          normal: path.join(fontsDir, "Georgia.TTF"), // Fallback to Georgia if Roboto not available
+          bold: path.join(fontsDir, "Georgia-Bold.TTF"),
+          italics: path.join(fontsDir, "Georgia-Italic.TTF"),
+          bolditalics: path.join(fontsDir, "Georgia-BoldItalic.TTF"),
+        },
       };
 
       const printer = new PdfPrinter(fonts);
 
       // Ensure logo exists
-      const logoPath = path.join(projectRoot, "assets", "images", "kra_logo.png");
+      const logoPath = path.join(
+        projectRoot,
+        "assets",
+        "images",
+        "kra_logo.png",
+      );
       let logo = null;
       if (fs.existsSync(logoPath)) {
         logo = logoPath;
-      }
-      else {
+      } else {
         console.warn("⚠️ KRA logo not found at:", logoPath);
       }
 
@@ -59,21 +70,24 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
           image: logo || "assets/images/placeholder_logo.png",
           width: 250,
           alignment: "center",
-          margin: [0, 5, 0, 5],
+          margin: [0, 2, 0, 2],
         },
         {
           text: "ISO 9001:2015 CERTIFIED",
           style: "header",
-          fontSize: 8,
+          fontSize: 7,
           alignment: "center",
+          margin: [0, 1, 0, 1],
         },
         {
           text: `KENYA REVENUE AUTHORITY DOMESTIC TAXES DEPARTMENT TAX DEDUCTION CARD YEAR ${year}`,
-          fontSize: 9,
+          fontSize: 8,
           style: "header",
+          margin: [0, 1, 0, 1],
         },
         {
           columns: [{ text: "APPENDIX 2A", style: "kra", alignment: "left" }],
+          margin: [0, 1, 0, 1],
         },
         {
           columns: [
@@ -106,7 +120,8 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
               },
             ],
           ],
-          margin: [0, 10, 0, 10],
+          margin: [0, 5, 0, 5], // Reduced from [0,10,0,10]
+          columnGap: 10,
         },
       ];
 
@@ -129,7 +144,7 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
       const sortedData = monthlyPayrollData.sort(
         (a, b) =>
           months.indexOf(a.payroll_run.payroll_month) -
-          months.indexOf(b.payroll_run.payroll_month)
+          months.indexOf(b.payroll_run.payroll_month),
       );
 
       // --- Totals accumulator ---
@@ -263,38 +278,75 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
       // --- Table data rows ---
       sortedData.forEach((m) => {
         const salary = m.basic_salary || 0;
-        const benefits = m.total_non_cash_benefits + m.total_allowances || 0;
+        const benefits = m.total_allowances || 0;
         const gross = m.gross_pay || 0;
-        const e1 = salary * 0.3;
-        const e2 = m.nssf_deduction || 0;
-        const e3 = 30000;
-        const f = m.housing_levy_deduction || 0;
-        const g = m.shif_deduction || 0;
-        const h = 0;
-        const i = 0;
-        const j = Math.min(e1, e2, e3) + f + g + h + i;
-        const k = gross - j || 0;
-        const l = m.paye_tax + 2400 || 0;
-        const m_p = 2400;
-        const n = m.insurance_relief || 0;
-        const o = l - m_p - n;
 
-        totals.salary += salary;
-        totals.benefits += benefits;
-        totals.gross += gross;
-        totals.e1 += e1;
-        totals.e2 += e2;
-        totals.e3 += e3;
-        totals.f += f;
-        totals.g += g;
-        totals.h += h;
-        totals.i += i;
-        totals.j += j;
-        totals.k += k;
-        totals.l += l;
-        totals.m_p += m_p;
-        totals.n += n;
-        totals.o += o;
+        // Check if employee is secondary
+        const isSecondary =
+          employee.employee_type?.toLowerCase() === "secondary employee";
+
+        let e1, e2, e3, f, g, h, i, j, k, l, m_p, n, o;
+
+        if (isSecondary) {
+          // Secondary employee: No reliefs, chargeable pay = gross pay
+          e1 = 0;
+          e2 = 0;
+          e3 = 0;
+          f = 0;
+          g = 0;
+          h = 0;
+          i = 0;
+          j = 0; // No deductions
+          k = gross; // Chargeable pay equals gross pay
+          l = m.paye_tax || 0; // Tax charged (without adding personal relief)
+          m_p = 0; // No personal relief
+          n = 0; // No insurance relief
+          o = l; // PAYE tax = tax charged (no reliefs subtracted)
+        } else {
+          // Primary employee: Normal calculations with reliefs
+          e1 = salary * 0.3;
+          e2 = m.nssf_deduction || 0;
+          e3 = 30000;
+          f = m.housing_levy_deduction || 0;
+          g = m.shif_deduction || 0;
+          h = 0;
+          i = 0;
+          j = Math.min(e1, e2, e3) + f + g + h + i;
+          k = gross - j || 0;
+          l = (m.paye_tax || 0) + 2400; // Add personal relief back for tax charged
+          m_p = 2400; // Personal relief
+          n = m.insurance_relief || 0;
+          o = l - m_p - n;
+        }
+
+        // Update totals (only for primary employees, or track separately if needed)
+        if (!isSecondary) {
+          totals.salary += salary;
+          totals.benefits += benefits;
+          totals.gross += gross;
+          totals.e1 += e1;
+          totals.e2 += e2;
+          totals.e3 += e3;
+          totals.f += f;
+          totals.g += g;
+          totals.h += h;
+          totals.i += i;
+          totals.j += j;
+          totals.k += k;
+          totals.l += l;
+          totals.m_p += m_p;
+          totals.n += n;
+          totals.o += o;
+        } else {
+          // For secondary employees, only add to relevant totals
+          totals.salary += salary;
+          totals.benefits += benefits;
+          totals.gross += gross;
+          totals.k += k;
+          totals.l += l;
+          totals.o += o;
+          // Other totals remain 0 for secondary employees
+        }
 
         tableBody.push([
           {
@@ -353,27 +405,27 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
           [
             {
               text: "To be completed by Employer at end of year",
-              fontSize: 7,
+              fontSize: 6,
               bold: true,
-              margin: [0, 0, 0, 2],
+              margin: [0, 0, 0, 1],
             },
             {
               text: `TOTAL CHARGEABLE PAY (COL. K) Kshs. ${formatCurrency(
-                totals.k
+                totals.k,
               )}`,
-              fontSize: 7,
+              fontSize: 6,
               bold: true,
-              margin: [0, 0, 0, 2],
+              margin: [0, 0, 0, 1],
             },
             {
               text: "IMPORTANT",
               bold: true,
-              fontSize: 7,
-              margin: [0, 1, 0, 1],
+              fontSize: 6,
+              margin: [0, 1, 0, 0],
             },
             {
               text: "1. Use P9A",
-              fontSize: 6,
+              fontSize: 5,
               margin: [0, 1, 0, 1],
             },
             {
@@ -382,13 +434,13 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
                 "(b) Where an employee is eligible to deduction on owner occupier interest.",
                 "(c) Where an employee contributes to a post retirement medical fund",
               ],
-              fontSize: 6,
-              lineHeight: 0.9,
+              fontSize: 5,
+              lineHeight: 0.8,
               margin: [0, 1, 0, 1],
             },
             {
               text: "2.",
-              fontSize: 6,
+              fontSize: 5,
               margin: [0, 1, 0, 1],
             },
             {
@@ -400,27 +452,27 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
                 "(e) Personal Relief is Kshs. 2400 per Month or 28,800 per year",
                 "(f) Insurance Relief is 15% of the Premium up to a Maximum of Kshs. 5,000 per month or Kshs. 60,000 per year",
               ],
-              fontSize: 6,
-              lineHeight: 0.9,
+              fontSize: 5,
+              lineHeight: 0.8,
               margin: [0, 1, 0, 1],
             },
             {
               text: "P9A",
-              fontSize: 7,
+              fontSize: 6,
               bold: true,
-              margin: [0, 2, 0, 0],
+              margin: [0, 1, 0, 0],
             },
           ],
           [
             {
               text: `TOTAL TAX (COL. O) Kshs. ${formatCurrency(totals.o)}`,
-              fontSize: 7,
+              fontSize: 6,
               bold: true,
-              margin: [0, 0, 0, 2],
+              margin: [0, 0, 0, 1],
             },
             {
               text: "c) Attach",
-              fontSize: 6,
+              fontSize: 5,
               margin: [0, 2, 0, 1],
             },
             {
@@ -428,8 +480,8 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
                 "(i) Photostat copy of interest certificate and statement of account from the Financial Institution",
                 "(ii) The DECLARATION duly signed by the employee.",
               ],
-              fontSize: 6,
-              lineHeight: 0.9,
+              fontSize: 5,
+              lineHeight: 0.8,
             },
           ],
         ],
@@ -440,7 +492,7 @@ export const generateP9APDF = (monthlyPayrollData, employee, company, year) => {
         pageOrientation: "landscape",
         pageSize: "A4",
         //pageMargins: [20, 30, 20, 30],
-        defaultStyle: { font: "Georgia" },
+        defaultStyle: { font: "Georgia", fontSize: 5 },
         content: [
           ...headerContent,
           {
