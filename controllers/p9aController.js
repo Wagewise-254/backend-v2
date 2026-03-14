@@ -28,7 +28,7 @@ export const generateP9APdf = async (req, res) => {
           krapin,
           employee_number,
           email,
-          employee_type,
+          employee_type
         ),
         payroll_run:payroll_run_id (
           payroll_month,
@@ -123,7 +123,7 @@ export const emailP9A = async (req, res) => {
                     krapin,
                     employee_number,
                     email,
-                    employee_type,
+                    employee_type
                 ),
                 payroll_run:payroll_run_id (
                     payroll_month,
