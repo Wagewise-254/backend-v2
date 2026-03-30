@@ -10,8 +10,13 @@ router.get('/notifications', verifyToken, async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
+     const unreadOnly = req.query.unread_only === 'true';
+    const archived = req.query.archived === 'true';
+    const search = req.query.search || '';
+    const severity = req.query.severity;
+    const type = req.query.type;
     
-    const result = await notificationService.getUserNotifications(req.userId, page, limit);
+    const result = await notificationService.getUserNotifications(req.userId, page, limit, { unreadOnly, archived, search, severity, type });
     res.json(result);
   } catch (error) {
     res.status(500).json({ error: error.message });

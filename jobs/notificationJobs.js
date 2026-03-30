@@ -45,7 +45,9 @@ export const checkPayrollNotifications = async () => {
           type: 'PAYROLL_REMINDER',
           title: 'Payroll Not Started',
           message: `Payroll for ${currentMonth} ${currentYear} has not been started.`,
-          severity: 'WARNING'
+          severity: 'WARNING',
+          entity_type: 'company',
+          entity_id: company.id
         }));
         await notificationService.createBulkNotifications(notifications);
       } 
@@ -59,7 +61,9 @@ export const checkPayrollNotifications = async () => {
             type: 'PAYROLL_REMINDER',
             title: 'Payroll Still in Draft',
             message: `Payroll for ${currentMonth} ${currentYear} has been in draft for ${daysInDraft} days.`,
-            severity: 'WARNING'
+            severity: 'WARNING',
+            entity_type: 'payroll_run',
+            entity_id: payrollRun.id
           }));
           await notificationService.createBulkNotifications(notifications);
         }
@@ -72,7 +76,9 @@ export const checkPayrollNotifications = async () => {
           type: 'PAYROLL_APPROVAL',
           title: 'Payroll Awaiting Approval',
           message: `Payroll for ${currentMonth} ${currentYear} is waiting for reviewer approval.`,
-          severity: 'INFO'
+          severity: 'INFO',
+          entity_type: 'payroll_run',
+          entity_id: payrollRun.id
         }));
         await notificationService.createBulkNotifications(notifications);
       }
@@ -84,7 +90,9 @@ export const checkPayrollNotifications = async () => {
           type: 'PAYROLL_PAYMENT',
           title: 'Payroll Locked but Not Paid',
           message: `Payroll for ${currentMonth} ${currentYear} has been locked but not paid.`,
-          severity: 'WARNING'
+          severity: 'WARNING',
+          entity_type: 'payroll_run',
+          entity_id: payrollRun.id
         }));
         await notificationService.createBulkNotifications(notifications);
       }
@@ -154,7 +162,7 @@ export const checkMissingEmployeeDetails = async () => {
   console.log('Checking missing employee details...');
 
   try {
-    // Find employees missing bank details
+    // Find employees missing bank details (ONLY those without ANY payment details)
     const { data: employeesMissingBank } = await supabase
       .from('employees')
       .select(`
@@ -163,12 +171,33 @@ export const checkMissingEmployeeDetails = async () => {
         last_name,
         company_id,
         employee_payment_details!left (
+          id,
           account_number
         )
       `)
-      .is('employee_payment_details.account_number', null);
+      .eq('employee_status', 'ACTIVE') // Only active employees
+      .or('employee_payment_details.id.is.null,employee_payment_details.account_number.is.null');
 
     for (const employee of employeesMissingBank || []) {
+      // Check if notification already exists for this specific employee
+      const { data: existingNotification } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('company_id', employee.company_id)
+        .eq('type', 'EMPLOYEE_UPDATE')
+        .eq('entity_id', employee.id)
+        .eq('entity_type', 'employee')
+        .eq('is_read', false)
+        .eq('is_archived', false)
+        .gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+        .limit(1);
+
+      // Skip if notification already exists
+      if (existingNotification && existingNotification.length > 0) {
+        console.log(`Skipping duplicate notification for employee ${employee.id} (missing bank details)`);
+        continue;
+      }
+
       // Get company admins
       const { data: admins } = await supabase
         .from('company_users')
@@ -186,19 +215,40 @@ export const checkMissingEmployeeDetails = async () => {
         message: `${employee.first_name} ${employee.last_name} has no bank account details.`,
         severity: 'WARNING',
         entity_type: 'employee',
-        entity_id: employee.id
+        entity_id: employee.id,
+        metadata: { missing_field: 'bank_details' }
       }));
 
       await notificationService.createBulkNotifications(notifications);
     }
 
-    // Find employees missing KRA PIN
+    // Find employees missing KRA PIN (ONLY those without KRA PIN)
     const { data: employeesMissingKRA } = await supabase
       .from('employees')
-      .select('id, first_name, last_name, company_id')
+      .select('id, first_name, last_name, company_id, krapin')
+      .eq('employee_status', 'ACTIVE') // Only active employees
       .is('krapin', null);
 
     for (const employee of employeesMissingKRA || []) {
+      // Check if notification already exists for this specific employee
+      const { data: existingNotification } = await supabase
+        .from('notifications')
+        .select('id')
+        .eq('company_id', employee.company_id)
+        .eq('type', 'EMPLOYEE_UPDATE')
+        .eq('entity_id', employee.id)
+        .eq('entity_type', 'employee')
+        .eq('is_read', false)
+        .eq('is_archived', false)
+        .gte('created_at', new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString())
+        .limit(1);
+
+      // Skip if notification already exists
+      if (existingNotification && existingNotification.length > 0) {
+        console.log(`Skipping duplicate notification for employee ${employee.id} (missing KRA PIN)`);
+        continue;
+      }
+
       const { data: admins } = await supabase
         .from('company_users')
         .select('user_id')
@@ -215,7 +265,8 @@ export const checkMissingEmployeeDetails = async () => {
         message: `${employee.first_name} ${employee.last_name} has no KRA PIN.`,
         severity: 'WARNING',
         entity_type: 'employee',
-        entity_id: employee.id
+        entity_id: employee.id,
+        metadata: { missing_field: 'kra_pin' }
       }));
 
       await notificationService.createBulkNotifications(notifications);

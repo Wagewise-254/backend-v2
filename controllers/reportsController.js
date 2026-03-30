@@ -191,7 +191,9 @@ const fetchPayrollData = async (companyId, runId) => {
                 marital_status
             ),
             payroll_run:payroll_run_id (
-                payroll_number
+                 payroll_number,
+                payroll_month,
+                payroll_year
             )
         `,
     )
@@ -247,7 +249,7 @@ export const getAnnualReportYears = async (req, res) => {
     }
 
     // Fetch unique payroll years where the payroll run is 'Completed'
-   const { data, error } = await supabase
+    const { data, error } = await supabase
       .from("payroll_runs")
       .select("payroll_year")
       .eq("company_id", companyId)
@@ -562,12 +564,14 @@ export const generateReport = async (req, res) => {
       case "kra-sec-b1":
         // Call KRA file generation logic
         const kraCsv = await generateKraSecB1(payrollData);
+        // Add UTF-8 BOM for better Excel compatibility
+        const kraCsvWithBom = "\uFEFF" + kraCsv;
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
           getDisposition(`KRA_SEC_B1_${runId}.csv`, download),
         );
-        res.end(Buffer.from(kraCsv, "utf-8"));
+        res.end(Buffer.from(kraCsvWithBom, "utf-8"));
         break;
       case "nssf-return":
         // Call NSSF file generation logic
@@ -716,23 +720,25 @@ const generateKraSecB1 = (data) => {
 
   // Define the fields for the CSV file. This acts as the header.
   const kraRecords = data.map((record) => {
-   // Parse allowances and deductions
-    const allowances = typeof record.allowances_details === 'string' 
-      ? JSON.parse(record.allowances_details || '[]') 
-      : record.allowances_details || [];
-      
-    const deductions = typeof record.deductions_details === 'string'
-      ? JSON.parse(record.deductions_details || '[]')
-      : record.deductions_details || [];
+    // Parse allowances and deductions
+    const allowances =
+      typeof record.allowances_details === "string"
+        ? JSON.parse(record.allowances_details || "[]")
+        : record.allowances_details || [];
 
-      // Helper function to get allowance by code
+    const deductions =
+      typeof record.deductions_details === "string"
+        ? JSON.parse(record.deductions_details || "[]")
+        : record.deductions_details || [];
+
+    // Helper function to get allowance by code
     const getAllowanceByCode = (code) => {
-      return allowances.find(a => a.code === code);
+      return allowances.find((a) => a.code === code);
     };
 
     // Helper function to get deduction by code
     const getDeductionByCode = (code) => {
-      return deductions.find(d => d.code === code);
+      return deductions.find((d) => d.code === code);
     };
 
     // Get specific allowances by code
@@ -742,14 +748,15 @@ const generateKraSecB1 = (data) => {
 
     // Calculate cash allowances (all cash allowances)
     const cashAllowances = allowances
-      .filter(a => a.type === "CASH" || a.is_cash === true)
+      .filter((a) => a.type === "CASH" || a.is_cash === true)
       .reduce((sum, a) => sum + parseFloat(a.value || 0), 0);
 
     // Calculate non-cash benefits excluding the ones we handle separately
     const otherNonCashBenefits = allowances
-      .filter(a => 
-        (a.type?.startsWith("NON_CASH") || a.is_cash === false) &&
-        !["HOUSING", "CAR", "MEAL"].includes(a.code)
+      .filter(
+        (a) =>
+          (a.type?.startsWith("NON_CASH") || a.is_cash === false) &&
+          !["HOUSING", "CAR", "MEAL"].includes(a.code),
       )
       .reduce((sum, a) => sum + parseFloat(a.value || 0), 0);
 
@@ -757,28 +764,31 @@ const generateKraSecB1 = (data) => {
     const mortgageDeduction = getDeductionByCode("MORTGAGE");
     const pensionDeduction = getDeductionByCode("PENSION");
     const prmfDeduction = getDeductionByCode("PRMF"); // Post Retirement Medical Fund
-    const insuranceDeduction = deductions.find(d => 
-      d.code === "INS" || d.name?.toLowerCase().includes("insurance")
+    const insuranceDeduction = deductions.find(
+      (d) => d.code === "INS" || d.name?.toLowerCase().includes("insurance"),
     );
 
     // Calculate total non-cash benefits (excluding housing which goes in separate field)
-    const totalNonCashBenefits = 
-      (carAllowance?.value || 0) + 
-      (mealsAllowance?.value || 0) + 
+    const totalNonCashBenefits =
+      (carAllowance?.value || 0) +
+      (mealsAllowance?.value || 0) +
       otherNonCashBenefits;
 
     // Determine housing benefit status
-    const housingBenefitStatus = housingAllowance?.value > 0 
-      ? "Employer's owned House" 
-      : "Benefit not given";
+    const housingBenefitStatus =
+      housingAllowance?.value > 0
+        ? "Employer's owned House"
+        : "Benefit not given";
 
     // Determine resident and disability status
-    const residentStatus = record.employee?.citizenship?.toLowerCase() !== "kenyan"
-      ? "Non-Resident"
-      : "Resident";
-    
-    const employeeDisabilityStatus = record.employee?.has_disability ? "Yes" : "No";
+    const residentStatus =
+      record.employee?.citizenship?.toLowerCase() !== "kenyan"
+        ? "Non-Resident"
+        : "Resident";
 
+    const employeeDisabilityStatus = record.employee?.has_disability
+      ? "Yes"
+      : "No";
 
     return [
       record.employee.krapin || "",
@@ -797,9 +807,9 @@ const generateKraSecB1 = (data) => {
       formatCurrency(housingAllowance?.value || 0),
       formatCurrency(cashAllowances),
       "", // Blank
-       formatCurrency(record.shif_deduction || 0),
+      formatCurrency(record.shif_deduction || 0),
       formatCurrency(record.nssf_deduction || 0),
-     formatCurrency(pensionDeduction?.value || 0), // Other pension deductions (PENSION only)
+      formatCurrency(pensionDeduction?.value || 0), // Other pension deductions (PENSION only)
       formatCurrency(prmfDeduction?.value || 0), // Post Retirement Medical Fund
       formatCurrency(mortgageDeduction?.value || 0), // Mortgage interest
       formatCurrency(record.housing_levy_deduction || 0),
@@ -883,13 +893,16 @@ const generateNssfReturn = async (data) => {
     ]);
   });
 
-  // Add a summary row at the bottom 
-  const totals = data.reduce((acc, record) => {
-    acc.grossPay += parseFloat(record.gross_pay) || 0;
-    acc.tier1Employee += parseFloat(record.nssf_tier1_deduction) || 0;
-    acc.tier2Employee += parseFloat(record.nssf_tier2_deduction) || 0;
-    return acc;
-  }, { grossPay: 0, tier1Employee: 0, tier2Employee: 0 });
+  // Add a summary row at the bottom
+  const totals = data.reduce(
+    (acc, record) => {
+      acc.grossPay += parseFloat(record.gross_pay) || 0;
+      acc.tier1Employee += parseFloat(record.nssf_tier1_deduction) || 0;
+      acc.tier2Employee += parseFloat(record.nssf_tier2_deduction) || 0;
+      return acc;
+    },
+    { grossPay: 0, tier1Employee: 0, tier2Employee: 0 },
+  );
 
   // Add empty row before summary
   worksheet.addRow([]);
@@ -897,13 +910,23 @@ const generateNssfReturn = async (data) => {
   // Add summary row
   worksheet.addRow([
     "TOTALS",
-    "", "", "", "", "", "", "", "", "", "", "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
+    "",
     totals.grossPay.toFixed(2),
     totals.tier1Employee.toFixed(2),
-    totals.tier1Employee.toFixed(2),  // Employer matches employee
+    totals.tier1Employee.toFixed(2), // Employer matches employee
     (totals.tier1Employee * 2).toFixed(2),
     totals.tier2Employee.toFixed(2),
-    totals.tier2Employee.toFixed(2),  // Employer matches employee
+    totals.tier2Employee.toFixed(2), // Employer matches employee
     (totals.tier2Employee * 2).toFixed(2),
   ]);
 
@@ -1031,7 +1054,7 @@ const generateBankPaymentFile = (data) => {
       record.branch_name || "",
       record.branch_code || "",
       formatCurrency(record.net_pay),
-      `Payroll Ref ${record.payroll_run.payroll_number}`,
+      `Salary ${record.payroll_run?.payroll_month || ""} ${record.payroll_run?.payroll_year || ""}`,
     ]);
   const columns = [
     "full names",
@@ -1424,41 +1447,214 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
         lastRow + 1
       }`,
     );
-  } else if (reportType === "Allowance Report") {
-    const worksheet = workbook.addWorksheet(reportType);
-    headers = ["Employee No", "Full Name", "Allowance Name", "Amount"];
-    worksheet.addRow(headers);
+ } else if (reportType === "Allowance Report") {
+    // Collect all unique allowance names across all employees
+    const allAllowanceNames = new Set();
+
     data.forEach((record) => {
-      const allowances = record.allowances_details || [];
-      if (Array.isArray(allowances)) {
-        allowances.forEach((allowance) => {
-          worksheet.addRow([
-            record.employee.employee_number,
-            `${record.employee.first_name} ${record.employee.last_name}`,
-            allowance.name,
-            parseFloat(allowance.value),
-          ]);
-        });
-      }
+      const allowances = Array.isArray(record.allowances_details)
+        ? record.allowances_details
+        : JSON.parse(record.allowances_details || "[]");
+
+      allowances.forEach((allowance) => {
+        if (allowance.name) {
+          allAllowanceNames.add(allowance.name);
+        }
+      });
     });
+
+    const allowanceNames = Array.from(allAllowanceNames).sort();
+
+    // If no allowances found, create a sheet with no data message
+    if (allowanceNames.length === 0) {
+      const emptySheet = workbook.addWorksheet("Allowance Report");
+      emptySheet.addRow(["No allowance data found for this payroll run."]);
+      return await workbook.xlsx.writeBuffer();
+    }
+
+    // Create a separate sheet for each allowance type
+    for (const allowanceName of allowanceNames) {
+      // Clean sheet name (Excel has 31 char limit and can't have certain characters)
+      let sheetName = allowanceName.substring(0, 31);
+      sheetName = sheetName.replace(/[\\/*?:\[\]]/g, "");
+
+      const worksheet = workbook.addWorksheet(sheetName);
+
+      // Add title
+      worksheet.mergeCells("A1:D1");
+      const titleCell = worksheet.getCell("A1");
+      titleCell.value = `${allowanceName} Report`;
+      titleCell.font = { bold: true, size: 14 };
+      titleCell.alignment = { horizontal: "center" };
+
+      // Add headers
+      const headers = ["EMP. No.", "Full Name", "Allowance Amount (KES)"];
+      worksheet.addRow(headers);
+
+      // Style headers
+      worksheet.getRow(2).eachCell((cell) => {
+        cell.font = { bold: true };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFF0F0F0" },
+        };
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+      });
+
+      // Add data rows
+      let totalAmount = 0;
+
+      data.forEach((record) => {
+        const allowances = Array.isArray(record.allowances_details)
+          ? record.allowances_details
+          : JSON.parse(record.allowances_details || "[]");
+
+        const allowance = allowances.find((a) => a.name === allowanceName);
+        const amount = allowance ? parseFloat(allowance.value) : 0;
+
+        if (amount > 0) {
+          totalAmount += amount;
+
+          worksheet.addRow([
+            record.employee?.employee_number || "",
+            `${record.employee?.first_name || ""} ${record.employee?.last_name || ""}`.trim(),
+            amount,
+          ]);
+        }
+      });
+
+      // Add totals row
+      worksheet.addRow([]);
+      const totalRow = worksheet.addRow(["", "TOTAL", totalAmount]);
+      totalRow.getCell(3).font = { bold: true };
+      totalRow.getCell(3).numFmt = "#,##0.00";
+
+      // Format amount column
+      worksheet.getColumn(3).numFmt = "#,##0.00";
+
+      // Adjust column widths
+      worksheet.getColumn(1).width = 15;
+      worksheet.getColumn(2).width = 30;
+      worksheet.getColumn(3).width = 20;
+
+      // Add footer
+      const lastRow = worksheet.lastRow.number + 2;
+      worksheet.mergeCells(`A${lastRow}:C${lastRow}`);
+      worksheet.getCell(`A${lastRow}`).value =
+        `Printed on: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+      worksheet.getCell(`A${lastRow}`).font = { italic: true, size: 9 };
+    }
   } else if (reportType === "Deduction Report") {
-    const worksheet = workbook.addWorksheet(reportType);
-    headers = ["Employee No", "Full Name", "Deduction Name", "Amount"];
-    worksheet.addRow(headers);
+    // Collect all unique deduction names across all employees
+    const allDeductionNames = new Set();
+
     data.forEach((record) => {
-      const deductions = record.deductions_details || [];
-      if (Array.isArray(deductions)) {
-        deductions.forEach((deduction) => {
-          worksheet.addRow([
-            record.employee.employee_number,
-            `${record.employee.first_name} ${record.employee.last_name}`,
-            deduction.name,
-            parseFloat(deduction.value),
-          ]);
-        });
-      }
+      const deductions = Array.isArray(record.deductions_details)
+        ? record.deductions_details
+        : JSON.parse(record.deductions_details || "[]");
+
+      deductions.forEach((deduction) => {
+        if (deduction.name) {
+          allDeductionNames.add(deduction.name);
+        }
+      });
     });
+
+    const deductionNames = Array.from(allDeductionNames).sort();
+
+    // If no deductions found, create a sheet with no data message
+    if (deductionNames.length === 0) {
+      const emptySheet = workbook.addWorksheet("Deduction Report");
+      emptySheet.addRow(["No deduction data found for this payroll run."]);
+      return await workbook.xlsx.writeBuffer();
+    }
+
+    // Create a separate sheet for each deduction type
+    for (const deductionName of deductionNames) {
+      // Clean sheet name (Excel has 31 char limit and can't have certain characters)
+      let sheetName = deductionName.substring(0, 31);
+      sheetName = sheetName.replace(/[\\/*?:\[\]]/g, "");
+
+      const worksheet = workbook.addWorksheet(sheetName);
+
+      // Add title
+      worksheet.mergeCells("A1:D1");
+      const titleCell = worksheet.getCell("A1");
+      titleCell.value = `${deductionName} Report`;
+      titleCell.font = { bold: true, size: 14 };
+      titleCell.alignment = { horizontal: "center" };
+
+      // Add headers
+      const headers = ["EMP. No.", "Full Name", "Deduction Amount (KES)"];
+      worksheet.addRow(headers);
+
+      // Style headers
+      worksheet.getRow(2).eachCell((cell) => {
+        cell.font = { bold: true };
+        cell.fill = {
+          type: "pattern",
+          pattern: "solid",
+          fgColor: { argb: "FFF0F0F0" },
+        };
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+      });
+
+      // Add data rows
+      let totalAmount = 0;
+
+      data.forEach((record) => {
+        const deductions = Array.isArray(record.deductions_details)
+          ? record.deductions_details
+          : JSON.parse(record.deductions_details || "[]");
+
+        const deduction = deductions.find((d) => d.name === deductionName);
+        const amount = deduction ? parseFloat(deduction.value) : 0;
+
+        if (amount > 0) {
+          totalAmount += amount;
+
+          worksheet.addRow([
+            record.employee?.employee_number || "",
+            `${record.employee?.first_name || ""} ${record.employee?.last_name || ""}`.trim(),
+            amount,
+          ]);
+        }
+      });
+
+      // Add totals row
+      worksheet.addRow([]);
+      const totalRow = worksheet.addRow(["", "TOTAL", totalAmount]);
+      totalRow.getCell(3).font = { bold: true };
+      totalRow.getCell(3).numFmt = "#,##0.00";
+
+      // Format amount column
+      worksheet.getColumn(3).numFmt = "#,##0.00";
+
+      // Adjust column widths
+      worksheet.getColumn(1).width = 15;
+      worksheet.getColumn(2).width = 30;
+      worksheet.getColumn(3).width = 20;
+
+      // Add footer
+      const lastRow = worksheet.lastRow.number + 2;
+      worksheet.mergeCells(`A${lastRow}:C${lastRow}`);
+      worksheet.getCell(`A${lastRow}`).value =
+        `Printed on: ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`;
+      worksheet.getCell(`A${lastRow}`).font = { italic: true, size: 9 };
+    }
   }
 
   return await workbook.xlsx.writeBuffer();
 };
+
