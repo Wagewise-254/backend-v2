@@ -21,6 +21,7 @@ import deductionTypeRoutes from './routes/deductionTypeRoutes.js';
 import allowanceTypeRoutes from './routes/allowanceTypeRoutes.js';
 import absentDaysRoutes from './routes/absentDaysRoutes.js';
 import companyReviewersRoutes from './routes/companyReviewersRoutes.js';
+import payrollEligibilityRoutes from './routes/payrollEligibilityRoutes.js';
 import payrollRoutes from './routes/payrollRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
 import payslipRoutes from './routes/payslipRoutes.js';
@@ -28,6 +29,9 @@ import p9aRoutes from './routes/p9aRoutes.js';
 import auditRoutes from './routes/auditRoutes.js';
 import authRoutes from './routes/authRoutes.js';
 import notificationRoutes from './routes/notificationRoutes.js';
+import searchRoutes from './routes/searchRoutes.js';
+import dashboardRoutes from './routes/dashboardRoutes.js';
+
 
 dotenv.config();
 
@@ -71,6 +75,7 @@ app.use('/api', notificationRoutes);
 
 app.use('/api/company/:companyId/payroll/runs', reportsRoutes);
 app.use('/api/company/:companyId', payrollRoutes);
+app.use('/api/company/:companyId', payrollEligibilityRoutes);
 app.use('/api/company/:companyId/payroll/payslip', payslipRoutes);
 app.use('/api/company/:companyId/employees', p9aRoutes);
 app.use('/api/company', helbRoutes);
@@ -84,6 +89,8 @@ app.use('/api/company', deductionRoutes);
 app.use('/api/company', absentDaysRoutes);
 app.use('/api/company', companyReviewersRoutes);
 app.use('/api/company', auditRoutes);
+app.use('/api/company', searchRoutes);
+app.use('/api/company', dashboardRoutes);
 
 
 const PORT = process.env.PORT || 3001;
