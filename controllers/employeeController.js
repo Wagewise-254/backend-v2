@@ -1672,3 +1672,179 @@ export const generateEmployeeTemplate = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+// Export employees to Excel
+export const exportEmployees = async (req, res) => {
+  const { companyId } = req.params;
+  const userId = req.userId;
+
+  try {
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_read",
+    );
+    if (!isAuthorized) {
+      return res.status(403).json({
+        error: "Unauthorized to export employees.",
+      });
+    }
+
+    // Fetch all employees with their relations
+    const { data: employees, error } = await supabase
+      .from("employees")
+      .select(
+        `
+        *,
+        departments (name),
+        sub_departments (name),
+        job_titles (title),
+        employee_payment_details (*),
+        employee_contracts (*)
+      `
+      )
+      .eq("company_id", companyId)
+      .order("employee_number", { ascending: true });
+
+    if (error) {
+      console.error("Export fetch error:", error);
+      throw new Error("Failed to fetch employees for export.");
+    }
+
+    // Prepare data for Excel
+    const exportData = employees.map(emp => {
+      // Get active contract (most recent)
+      const activeContract = emp.employee_contracts?.find(c => c.contract_status === "ACTIVE") || emp.employee_contracts?.[0];
+      
+      return {
+        "Employee Number": emp.employee_number || "",
+        "First Name": emp.first_name || "",
+        "Middle Name": emp.middle_name || "",
+        "Last Name": emp.last_name || "",
+        "Email": emp.email || "",
+        "Phone": emp.phone || "",
+        "Date of Birth": emp.date_of_birth || "",
+        "Gender": emp.gender || "",
+        "Blood Group": emp.blood_group || "",
+        "Marital Status": emp.marital_status || "",
+        "Hire Date": emp.hire_date || "",
+        "Department": emp.departments?.name || "",
+        "Sub Department": emp.sub_departments?.name || "",
+        "Job Title": emp.job_titles?.title || "",
+        "Job Type": emp.job_type || "",
+        "Employee Status": emp.employee_status || "",
+        "Employee Status Effective Date": emp.employee_status_effective_date || "",
+        "ID Type": emp.id_type || "",
+        "ID Number": emp.id_number || "",
+        "KRA PIN": emp.krapin || "",
+        "SHIF Number": emp.shif_number || "",
+        "NSSF Number": emp.nssf_number || "",
+        "Citizenship": emp.citizenship || "",
+        "Has Disability": emp.has_disability ? "Yes" : "No",
+        "Salary": emp.salary || 0,
+        "Employee Type": emp.employee_type || "",
+        "Pays PAYE": emp.pays_paye ? "Yes" : "No",
+        "Pays NSSF": emp.pays_nssf ? "Yes" : "No",
+        "Pays HELB": emp.pays_helb ? "Yes" : "No",
+        "Pays Housing Levy": emp.pays_housing_levy ? "Yes" : "No",
+        "Pays SHIF": emp.pays_shif ? "Yes" : "No",
+        "Contract Type": activeContract?.contract_type || "",
+        "Contract Start Date": activeContract?.start_date || "",
+        "Contract End Date": activeContract?.end_date || "",
+        "Probation End Date": activeContract?.probation_end_date || "",
+        "Contract Status": activeContract?.contract_status || "",
+        "Payment Method": emp.employee_payment_details?.[0]?.payment_method || "",
+        "Bank Name": emp.employee_payment_details?.[0]?.bank_name || "",
+        "Bank Code": emp.employee_payment_details?.[0]?.bank_code || "",
+        "Branch Name": emp.employee_payment_details?.[0]?.branch_name || "",
+        "Branch Code": emp.employee_payment_details?.[0]?.branch_code || "",
+        "Account Number": emp.employee_payment_details?.[0]?.account_number || "",
+        "Account Name": emp.employee_payment_details?.[0]?.account_name || "",
+        "Mobile Type": emp.employee_payment_details?.[0]?.mobile_type || "",
+        "Mobile Phone": emp.employee_payment_details?.[0]?.phone_number || "",
+      };
+    });
+
+    // Create workbook
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Employees");
+
+    // Get headers from the first object
+    const headers = Object.keys(exportData[0] || {});
+
+    // Add header row
+    const headerRow = worksheet.addRow(headers);
+    headerRow.eachCell((cell) => {
+      cell.font = { bold: true, size: 11 };
+      cell.fill = {
+        type: "pattern",
+        pattern: "solid",
+        fgColor: { argb: "FF4F46E5" }, // Indigo color
+      };
+      cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
+      cell.border = {
+        top: { style: "thin" },
+        left: { style: "thin" },
+        bottom: { style: "thin" },
+        right: { style: "thin" },
+      };
+    });
+
+    // Add data rows
+    exportData.forEach((row) => {
+      const dataRow = worksheet.addRow(Object.values(row));
+      dataRow.eachCell((cell) => {
+        cell.border = {
+          top: { style: "thin" },
+          left: { style: "thin" },
+          bottom: { style: "thin" },
+          right: { style: "thin" },
+        };
+      });
+    });
+
+    // Auto-size columns
+    worksheet.columns.forEach((column, colIndex) => {
+      let maxLength = headers[colIndex]?.length || 10;
+      worksheet.eachRow({ includeEmpty: true }, (row) => {
+        const cellValue = row.getCell(colIndex + 1).value;
+        if (cellValue) {
+          const cellLength = String(cellValue).length;
+          if (cellLength > maxLength) {
+            maxLength = Math.min(cellLength, 50); // Cap at 50 characters
+          }
+        }
+      });
+      column.width = maxLength + 2;
+    });
+
+    // Freeze header row
+    worksheet.views = [{ state: "frozen", ySplit: 1 }];
+
+    // Set response headers
+    const filename = `employees_export_${new Date().toISOString().split("T")[0]}.xlsx`;
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+
+    // Write to response
+    await workbook.xlsx.write(res);
+    res.end();
+
+    // Create audit log
+    await createAuditLog({
+      entityType: "employees",
+      entityId: "EXPORT",
+      action: "EXPORT",
+      performedBy: userId,
+      newData: { count: employees.length, companyId },
+    });
+
+  } catch (error) {
+    console.error("Export employees error:", error);
+    res.status(500).json({ error: error.message });
+  }
+};

@@ -7,8 +7,18 @@ const { utils, read } = pkg;
 
 // Month name constants for validation
 const MONTHS = [
-  "January", "February", "March", "April", "May", "June",
-  "July", "August", "September", "October", "November", "December"
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
 ];
 
 const monthNames = [
@@ -76,11 +86,11 @@ const calculateEndPeriod = (startMonth, startYear, numberOfMonths) => {
   // For 1 month, end should be same as start
   // For 2+ months, calculate properly
   const totalMonths = startMonthIndex + (numberOfMonths - 1); // Subtract 1 to make it inclusive
-  
+
   const endYear = startYear + Math.floor(totalMonths / 12);
   const endMonthIndex = totalMonths % 12;
   const endMonth = monthNames[endMonthIndex];
-  
+
   return { endMonth, endYear };
 };
 
@@ -108,8 +118,8 @@ export const assignAllowance = async (req, res) => {
 
   // Validate month
   if (!isValidMonth(start_month)) {
-    return res.status(400).json({ 
-      error: `Invalid start_month. Must be one of: ${MONTHS.join(', ')}` 
+    return res.status(400).json({
+      error: `Invalid start_month. Must be one of: ${MONTHS.join(", ")}`,
     });
   }
 
@@ -118,9 +128,9 @@ export const assignAllowance = async (req, res) => {
   let end_year = null;
   if (!is_recurring && number_of_months && start_month && start_year) {
     const { endMonth, endYear } = calculateEndPeriod(
-      start_month, 
-      parseInt(start_year), 
-      parseInt(number_of_months)
+      start_month,
+      parseInt(start_year),
+      parseInt(number_of_months),
     );
     end_month = endMonth;
     end_year = endYear;
@@ -140,10 +150,11 @@ export const assignAllowance = async (req, res) => {
     end_year,
     metadata,
     // Clear other IDs based on applies_to to ensure data integrity
-    employee_id: applies_to === 'INDIVIDUAL' ? employee_id : null,
-    department_id: applies_to === 'DEPARTMENT' ? department_id : null,
-    sub_department_id: applies_to === 'SUB_DEPARTMENT' ? sub_department_id : null,
-    job_title_id: applies_to === 'JOB_TITLE' ? job_title_id : null,
+    employee_id: applies_to === "INDIVIDUAL" ? employee_id : null,
+    department_id: applies_to === "DEPARTMENT" ? department_id : null,
+    sub_department_id:
+      applies_to === "SUB_DEPARTMENT" ? sub_department_id : null,
+    job_title_id: applies_to === "JOB_TITLE" ? job_title_id : null,
   };
 
   try {
@@ -159,9 +170,7 @@ export const assignAllowance = async (req, res) => {
       });
     }
 
-    const { data, error } = await supabase
-      .from("allowances")
-      .insert([payload])
+    const { data, error } = await supabase.from("allowances").insert([payload])
       .select(`
         *,
         allowance_types(name, is_cash, is_taxable, code),
@@ -199,16 +208,18 @@ export const getAllowances = async (req, res) => {
 
     const { data, error } = await supabase
       .from("allowances")
-      .select(`
+      .select(
+        `
         *, 
         allowance_types(name, is_cash, is_taxable, code), 
         employees(first_name, middle_name, last_name, employee_number),
         departments(name),
         sub_departments(name),
         job_titles(title)
-      `)
+      `,
+      )
       .eq("company_id", companyId)
-      .order('created_at', { ascending: false });
+      .order("created_at", { ascending: false });
 
     if (error) throw error;
     res.json(data);
@@ -238,14 +249,16 @@ export const getAllowanceById = async (req, res) => {
 
     const { data, error } = await supabase
       .from("allowances")
-      .select(`
+      .select(
+        `
         *,
         allowance_types(name, is_cash, is_taxable, code),
         employees(first_name, last_name, employee_number),
         departments(name),
         sub_departments(name),
         job_titles(title)
-      `)
+      `,
+      )
       .eq("id", id)
       .eq("company_id", companyId)
       .single();
@@ -274,8 +287,8 @@ export const updateAllowance = async (req, res) => {
 
   // Validate month if provided
   if (start_month && !isValidMonth(start_month)) {
-    return res.status(400).json({ 
-      error: `Invalid start_month. Must be one of: ${MONTHS.join(', ')}` 
+    return res.status(400).json({
+      error: `Invalid start_month. Must be one of: ${MONTHS.join(", ")}`,
     });
   }
 
@@ -284,9 +297,9 @@ export const updateAllowance = async (req, res) => {
   let end_year = null;
   if (!is_recurring && number_of_months && start_month && start_year) {
     const { endMonth, endYear } = calculateEndPeriod(
-      start_month, 
-      parseInt(start_year), 
-      parseInt(number_of_months)
+      start_month,
+      parseInt(start_year),
+      parseInt(number_of_months),
     );
     end_month = endMonth;
     end_year = endYear;
@@ -322,14 +335,16 @@ export const updateAllowance = async (req, res) => {
       .update(payload)
       .eq("id", id)
       .eq("company_id", companyId)
-      .select(`
+      .select(
+        `
         *,
         allowance_types(name, is_cash, is_taxable, code),
         employees(first_name, last_name, employee_number),
         departments(name),
         sub_departments(name),
         job_titles(title)
-      `)
+      `,
+      )
       .single();
 
     if (error) throw error;
@@ -378,8 +393,14 @@ export const bulkDeleteAllowances = async (req, res) => {
   const { allowanceIds } = req.body;
   const userId = req.userId;
 
-  if (!allowanceIds || !Array.isArray(allowanceIds) || allowanceIds.length === 0) {
-    return res.status(400).json({ error: "No allowance IDs provided for deletion." });
+  if (
+    !allowanceIds ||
+    !Array.isArray(allowanceIds) ||
+    allowanceIds.length === 0
+  ) {
+    return res
+      .status(400)
+      .json({ error: "No allowance IDs provided for deletion." });
   }
 
   try {
@@ -411,7 +432,9 @@ export const bulkDeleteAllowances = async (req, res) => {
     });
   } catch (err) {
     console.error("Bulk delete allowances controller error:", err);
-    res.status(500).json({ error: "An unexpected error occurred during bulk deletion." });
+    res
+      .status(500)
+      .json({ error: "An unexpected error occurred during bulk deletion." });
   }
 };
 
@@ -439,13 +462,23 @@ export const generateAllowanceTemplate = async (req, res) => {
       allowanceTypesResult,
       departmentsResult,
       subDepartmentsResult,
-      jobTitlesResult
+      jobTitlesResult,
     ] = await Promise.all([
-      supabase.from("employees").select("employee_number, first_name, last_name").eq("company_id", companyId),
-      supabase.from("allowance_types").select("name, code").eq("company_id", companyId),
+      supabase
+        .from("employees")
+        .select("employee_number, first_name, last_name, employee_status")
+        .eq("company_id", companyId)
+        .in("employee_status", ["ACTIVE", "ON LEAVE"]),
+      supabase
+        .from("allowance_types")
+        .select("name, code")
+        .eq("company_id", companyId),
       supabase.from("departments").select("name").eq("company_id", companyId),
-      supabase.from("sub_departments").select("name").eq("company_id", companyId),
-      supabase.from("job_titles").select("title").eq("company_id", companyId)
+      supabase
+        .from("sub_departments")
+        .select("name")
+        .eq("company_id", companyId),
+      supabase.from("job_titles").select("title").eq("company_id", companyId),
     ]);
 
     if (employeesResult.error) throw employeesResult.error;
@@ -464,7 +497,10 @@ export const generateAllowanceTemplate = async (req, res) => {
     employees.sort((a, b) => {
       const numA = a.employee_number || "";
       const numB = b.employee_number || "";
-      return numA.localeCompare(numB, undefined, { numeric: true, sensitivity: "base" });
+      return numA.localeCompare(numB, undefined, {
+        numeric: true,
+        sensitivity: "base",
+      });
     });
 
     allowanceTypes.sort((a, b) => a.name.localeCompare(b.name));
@@ -491,28 +527,28 @@ export const generateAllowanceTemplate = async (req, res) => {
     ];
 
     mainSheet.columns = headers;
-    
+
     // Style header row
     const headerRow = mainSheet.getRow(1);
     headerRow.font = { bold: true };
     headerRow.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFE0E0E0' }
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFE0E0E0" },
     };
 
     // Add sample row with instructions
     mainSheet.addRow([
-      "Housing", 
-      "INDIVIDUAL", 
-      "EMP001", 
-      "5000", 
-      "FIXED", 
-      "FALSE", 
-      "January", 
-      "2024", 
-      "12", 
-      '{"notes": "Monthly housing allowance"}'
+      "Housing",
+      "INDIVIDUAL",
+      "EMP001",
+      "5000",
+      "FIXED",
+      "FALSE",
+      "January",
+      "2024",
+      "12",
+      '{"notes": "Monthly housing allowance"}',
     ]);
 
     // Add empty rows for data entry (up to 1000 rows)
@@ -527,50 +563,68 @@ export const generateAllowanceTemplate = async (req, res) => {
     const refHeaderRow = refSheet.getRow(1);
     refHeaderRow.font = { bold: true };
     refHeaderRow.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFFFE699' }
+      type: "pattern",
+      pattern: "solid",
+      fgColor: { argb: "FFFFE699" },
     };
 
     // Add Employees section
-    refSheet.getCell('A1').value = 'EMPLOYEES';
-    refSheet.getCell('A2').value = 'Employee Number';
-    refSheet.getCell('B2').value = 'Full Name';
-    
+    refSheet.getCell("A1").value = "EMPLOYEES";
+    refSheet.getCell("A2").value = "Employee Number";
+    refSheet.getCell("B2").value = "Full Name";
+    refSheet.getCell("C2").value = "Status";
+
     employees.forEach((emp, index) => {
       const rowNum = index + 3;
       refSheet.getCell(`A${rowNum}`).value = emp.employee_number;
-      refSheet.getCell(`B${rowNum}`).value = `${emp.first_name} ${emp.last_name}`.trim();
+      refSheet.getCell(`B${rowNum}`).value =
+        `${emp.first_name} ${emp.last_name}`.trim();
+      refSheet.getCell(`C${rowNum}`).value = emp.employee_status;
+
+      //  Color code the status
+      if (emp.employee_status === 'ON LEAVE') {
+        refSheet.getCell(`C${rowNum}`).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFE699' } // Light yellow for on leave
+        };
+      } else if (emp.employee_status === 'ACTIVE') {
+        refSheet.getCell(`C${rowNum}`).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFC6EFCE' } // Light green for active
+        };
+      }
     });
 
     // Add Departments section
-    refSheet.getCell('D1').value = 'DEPARTMENTS';
-    refSheet.getCell('D2').value = 'Department Name';
-    
+    refSheet.getCell("D1").value = "DEPARTMENTS";
+    refSheet.getCell("D2").value = "Department Name";
+
     departments.forEach((dept, index) => {
       refSheet.getCell(`D${index + 3}`).value = dept.name;
     });
 
     // Add Sub-Departments section
-    refSheet.getCell('F1').value = 'SUB-DEPARTMENTS';
-    refSheet.getCell('F2').value = 'Sub-Department Name';
-    
+    refSheet.getCell("F1").value = "SUB-DEPARTMENTS";
+    refSheet.getCell("F2").value = "Sub-Department Name";
+
     subDepartments.forEach((sub, index) => {
       refSheet.getCell(`F${index + 3}`).value = sub.name;
     });
 
     // Add Job Titles section
-    refSheet.getCell('H1').value = 'JOB TITLES';
-    refSheet.getCell('H2').value = 'Job Title';
-    
+    refSheet.getCell("H1").value = "JOB TITLES";
+    refSheet.getCell("H2").value = "Job Title";
+
     jobTitles.forEach((job, index) => {
       refSheet.getCell(`H${index + 3}`).value = job.title;
     });
 
     // Add Months reference
-    refSheet.getCell('J1').value = 'MONTHS';
-    refSheet.getCell('J2').value = 'Valid Months';
-    
+    refSheet.getCell("J1").value = "MONTHS";
+    refSheet.getCell("J2").value = "Valid Months";
+
     MONTHS.forEach((month, index) => {
       refSheet.getCell(`J${index + 3}`).value = month;
     });
@@ -579,18 +633,19 @@ export const generateAllowanceTemplate = async (req, res) => {
     refSheet.columns = [
       { width: 20 }, // A: Employee Number
       { width: 30 }, // B: Full Name
-      { width: 5 },  // C: Spacer
-      { width: 25 }, // D: Department Name
-      { width: 5 },  // E: Spacer
-      { width: 25 }, // F: Sub-Department Name
-      { width: 5 },  // G: Spacer
-      { width: 25 }, // H: Job Title
-      { width: 5 },  // I: Spacer
-      { width: 20 }, // J: Months
+      { width: 15 }, // C: Status
+      { width: 5 },  // D: Spacer
+      { width: 25 }, // E: Department Name
+      { width: 5 },  // F: Spacer
+      { width: 25 }, // G: Sub-Department Name
+      { width: 5 },  // H: Spacer
+      { width: 25 }, // I: Job Title
+      { width: 5 },  // J: Spacer
+      { width: 20 }, // K: Months
     ];
 
     // Protect reference sheet
-    refSheet.protect('', {
+    refSheet.protect("", {
       selectLockedCells: true,
       selectUnlockedCells: true,
       formatCells: false,
@@ -599,75 +654,82 @@ export const generateAllowanceTemplate = async (req, res) => {
       insertColumns: false,
       insertRows: false,
       deleteColumns: false,
-      deleteRows: false
+      deleteRows: false,
     });
 
     // --- DROPDOWNS ON MAIN SHEET ---
-    
+
     // Prepare dropdown lists
-    const typeNames = allowanceTypes.map(t => t.name);
-    const appliesToOptions = ["INDIVIDUAL", "COMPANY", "DEPARTMENT", "SUB_DEPARTMENT", "JOB_TITLE"];
-    const employeeList = employees.map(e => e.employee_number);
-    const departmentList = departments.map(d => d.name);
-    const subDepartmentList = subDepartments.map(s => s.name);
-    const jobTitleList = jobTitles.map(j => j.title);
-    
+    const typeNames = allowanceTypes.map((t) => t.name);
+    const appliesToOptions = [
+      "INDIVIDUAL",
+      "COMPANY",
+      "DEPARTMENT",
+      "SUB_DEPARTMENT",
+      "JOB_TITLE",
+    ];
+    const employeeList = employees.map((e) => e.employee_number);
+    const departmentList = departments.map((d) => d.name);
+    const subDepartmentList = subDepartments.map((s) => s.name);
+    const jobTitleList = jobTitles.map((j) => j.title);
+
     for (let i = 2; i <= 1000; i++) {
       // Allowance Type dropdown
       if (typeNames.length > 0) {
         mainSheet.getCell(`A${i}`).dataValidation = {
-          type: 'list',
+          type: "list",
           allowBlank: false,
-          formulae: [`"${typeNames.join(',')}"`],
+          formulae: [`"${typeNames.join(",")}"`],
           showErrorMessage: true,
-          errorStyle: 'stop',
-          errorTitle: 'Invalid Allowance Type',
-          error: 'Please select a valid allowance type from the list'
+          errorStyle: "stop",
+          errorTitle: "Invalid Allowance Type",
+          error: "Please select a valid allowance type from the list",
         };
       }
 
       // Applies To dropdown
       mainSheet.getCell(`B${i}`).dataValidation = {
-        type: 'list',
+        type: "list",
         allowBlank: false,
-        formulae: [`"${appliesToOptions.join(',')}"`],
+        formulae: [`"${appliesToOptions.join(",")}"`],
         showErrorMessage: true,
-        errorStyle: 'stop',
-        errorTitle: 'Invalid Applies To',
-        error: 'Please select INDIVIDUAL, COMPANY, DEPARTMENT, SUB_DEPARTMENT, or JOB_TITLE'
+        errorStyle: "stop",
+        errorTitle: "Invalid Applies To",
+        error:
+          "Please select INDIVIDUAL, COMPANY, DEPARTMENT, SUB_DEPARTMENT, or JOB_TITLE",
       };
 
       // Calculation Type dropdown
       mainSheet.getCell(`E${i}`).dataValidation = {
-        type: 'list',
+        type: "list",
         allowBlank: false,
         formulae: ['"FIXED,PERCENTAGE"'],
         showErrorMessage: true,
-        errorStyle: 'stop',
-        errorTitle: 'Invalid Calculation Type',
-        error: 'Please select FIXED or PERCENTAGE'
+        errorStyle: "stop",
+        errorTitle: "Invalid Calculation Type",
+        error: "Please select FIXED or PERCENTAGE",
       };
 
       // Is Recurring dropdown
       mainSheet.getCell(`F${i}`).dataValidation = {
-        type: 'list',
+        type: "list",
         allowBlank: false,
         formulae: ['"TRUE,FALSE"'],
         showErrorMessage: true,
-        errorStyle: 'stop',
-        errorTitle: 'Invalid Value',
-        error: 'Please select TRUE or FALSE'
+        errorStyle: "stop",
+        errorTitle: "Invalid Value",
+        error: "Please select TRUE or FALSE",
       };
 
       // Start Month dropdown
       mainSheet.getCell(`G${i}`).dataValidation = {
-        type: 'list',
+        type: "list",
         allowBlank: false,
-        formulae: [`"${MONTHS.join(',')}"`],
+        formulae: [`"${MONTHS.join(",")}"`],
         showErrorMessage: true,
-        errorStyle: 'stop',
-        errorTitle: 'Invalid Month',
-        error: `Please select a valid month from the list`
+        errorStyle: "stop",
+        errorTitle: "Invalid Month",
+        error: `Please select a valid month from the list`,
       };
     }
 
@@ -678,25 +740,28 @@ export const generateAllowanceTemplate = async (req, res) => {
     
     notesSheet.getCell('A3').value = '1. Use the "Allowances" sheet to enter your data';
     notesSheet.getCell('A4').value = '2. Use the "Reference (Read Only)" sheet to see available employees, departments, etc.';
-    notesSheet.getCell('A5').value = '3. Column explanations:';
-    notesSheet.getCell('A6').value = '   - Allowance Type Name: Select from dropdown (based on your configured allowance types)';
-    notesSheet.getCell('A7').value = '   - Applies To: Select who this allowance applies to';
-    notesSheet.getCell('A8').value = '   - Target Identifier: Based on Applies To selection:';
-    notesSheet.getCell('A9').value = '     * INDIVIDUAL: Employee Number (see Reference sheet)';
-    notesSheet.getCell('A10').value = '     * DEPARTMENT: Department Name (see Reference sheet)';
-    notesSheet.getCell('A11').value = '     * SUB_DEPARTMENT: Sub-Department Name (see Reference sheet)';
-    notesSheet.getCell('A12').value = '     * JOB_TITLE: Job Title (see Reference sheet)';
-    notesSheet.getCell('A13').value = '     * COMPANY: Leave blank or enter "COMPANY"';
-    notesSheet.getCell('A14').value = '   - Value: Numeric value for the allowance';
-    notesSheet.getCell('A15').value = '   - Calc Type: FIXED or PERCENTAGE';
-    notesSheet.getCell('A16').value = '   - Is Recurring: TRUE (repeats) or FALSE (one-time)';
-    notesSheet.getCell('A17').value = '   - Start Month: Select from dropdown (January-December)';
-    notesSheet.getCell('A18').value = '   - Start Year: 4-digit year (e.g., 2024)';
-    notesSheet.getCell('A19').value = '   - Duration: For non-recurring, number of months (optional)';
-    notesSheet.getCell('A20').value = '   - Metadata: JSON format for additional data (optional)';
+    notesSheet.getCell('A5').value = '3. Only ACTIVE and ON LEAVE employees are shown in the reference sheet';
+    notesSheet.getCell('A6').value = '4. Column explanations:';
+    notesSheet.getCell('A7').value = '   - Allowance Type Name: Select from dropdown (based on your configured allowance types)';
+    notesSheet.getCell('A8').value = '   - Applies To: Select who this allowance applies to';
+    notesSheet.getCell('A9').value = '   - Target Identifier: Based on Applies To selection:';
+    notesSheet.getCell('A10').value = '     * INDIVIDUAL: Employee Number (see Reference sheet - only Active/On Leave)';
+    notesSheet.getCell('A11').value = '     * DEPARTMENT: Department Name (see Reference sheet)';
+    notesSheet.getCell('A12').value = '     * SUB_DEPARTMENT: Sub-Department Name (see Reference sheet)';
+    notesSheet.getCell('A13').value = '     * JOB_TITLE: Job Title (see Reference sheet)';
+    notesSheet.getCell('A14').value = '     * COMPANY: Leave blank or enter "COMPANY"';
+    notesSheet.getCell('A15').value = '   - Value: Numeric value for the allowance';
+    notesSheet.getCell('A16').value = '   - Calc Type: FIXED or PERCENTAGE';
+    notesSheet.getCell('A17').value = '   - Is Recurring: TRUE (repeats) or FALSE (one-time)';
+    notesSheet.getCell('A18').value = '   - Start Month: Select from dropdown (January-December)';
+    notesSheet.getCell('A19').value = '   - Start Year: 4-digit year (e.g., 2024)';
+    notesSheet.getCell('A20').value = '   - Duration: For non-recurring, number of months (optional)';
+    notesSheet.getCell('A21').value = '   - Metadata: JSON format for additional data (optional)';
     
-    notesSheet.getCell('A22').value = '4. All fields except Duration and Metadata are required';
+    notesSheet.getCell('A23').value = '5. All fields except Duration and Metadata are required';
+    notesSheet.getCell('A24').value = '6. Employees with status TERMINATED or SUSPENDED are excluded from the reference list';
     
+
     // Style notes sheet
     notesSheet.columns = [{ width: 80 }];
 
@@ -742,61 +807,94 @@ export const importAllowances = async (req, res) => {
     }
 
     const workbook = read(file.buffer, { type: "buffer" });
-    
+
     // Get the main sheet (Allowances)
-    const mainSheetName = workbook.SheetNames.find(name => 
-      name === "Allowances" || name.includes("Allowance")
+    const mainSheetName = workbook.SheetNames.find(
+      (name) => name === "Allowances" || name.includes("Allowance"),
     );
-    
+
     if (!mainSheetName) {
-      return res.status(400).json({ 
-        error: "Invalid template format. Please use the downloaded template." 
+      return res.status(400).json({
+        error: "Invalid template format. Please use the downloaded template.",
       });
     }
 
     const worksheet = workbook.Sheets[mainSheetName];
-    
+
     // Use sheet_to_json with header option to get proper parsing
-    const jsonData = utils.sheet_to_json(worksheet, { 
+    const jsonData = utils.sheet_to_json(worksheet, {
       header: 1,
-      defval: '',
-      blankrows: false
+      defval: "",
+      blankrows: false,
     });
 
     // Filter out empty rows and header row
-    const dataRows = jsonData.slice(1).filter(row => 
-      row && row.some(cell => cell !== null && cell !== undefined && cell !== '')
-    );
+    const dataRows = jsonData
+      .slice(1)
+      .filter(
+        (row) =>
+          row &&
+          row.some(
+            (cell) => cell !== null && cell !== undefined && cell !== "",
+          ),
+      );
 
     if (dataRows.length === 0) {
-      return res.status(400).json({ error: "No data found in the uploaded file." });
+      return res
+        .status(400)
+        .json({ error: "No data found in the uploaded file." });
     }
 
     // Pre-fetch all maps for lookup
     const [employees, depts, subs, titles, types] = await Promise.all([
-      supabase.from("employees").select("id, employee_number").eq("company_id", companyId),
-      supabase.from("departments").select("id, name").eq("company_id", companyId),
-      supabase.from("sub_departments").select("id, name").eq("company_id", companyId),
-      supabase.from("job_titles").select("id, title").eq("company_id", companyId),
-      supabase.from("allowance_types").select("id, name, code").eq("company_id", companyId)
+      supabase
+        .from("employees")
+        .select("id, employee_number")
+        .eq("company_id", companyId),
+      supabase
+        .from("departments")
+        .select("id, name")
+        .eq("company_id", companyId),
+      supabase
+        .from("sub_departments")
+        .select("id, name")
+        .eq("company_id", companyId),
+      supabase
+        .from("job_titles")
+        .select("id, title")
+        .eq("company_id", companyId),
+      supabase
+        .from("allowance_types")
+        .select("id, name, code")
+        .eq("company_id", companyId),
     ]);
 
-    if (employees.error || depts.error || subs.error || titles.error || types.error) {
+    if (
+      employees.error ||
+      depts.error ||
+      subs.error ||
+      titles.error ||
+      types.error
+    ) {
       throw new Error("Failed to fetch reference data");
     }
 
-    const empMap = new Map(employees.data.map(e => [e.employee_number, e.id]));
-    const deptMap = new Map(depts.data.map(d => [d.name?.trim(), d.id]));
-    const typeMap = new Map(types.data.map(t => [t.name?.trim(), { id: t.id, code: t.code }]));
-    const subMap = new Map(subs.data.map(s => [s.name?.trim(), s.id]));
-    const titleMap = new Map(titles.data.map(j => [j.title?.trim(), j.id]));
+    const empMap = new Map(
+      employees.data.map((e) => [e.employee_number, e.id]),
+    );
+    const deptMap = new Map(depts.data.map((d) => [d.name?.trim(), d.id]));
+    const typeMap = new Map(
+      types.data.map((t) => [t.name?.trim(), { id: t.id, code: t.code }]),
+    );
+    const subMap = new Map(subs.data.map((s) => [s.name?.trim(), s.id]));
+    const titleMap = new Map(titles.data.map((j) => [j.title?.trim(), j.id]));
 
     const toInsert = [];
     const errors = [];
 
     for (const [index, row] of dataRows.entries()) {
       const rowNumber = index + 2;
-      
+
       const typeName = row[0]?.toString().trim();
       const appliesTo = row[1]?.toString().trim().toUpperCase();
       const target = row[2]?.toString().trim();
@@ -817,7 +915,8 @@ export const importAllowances = async (req, res) => {
       const missingFields = [];
       if (!typeName) missingFields.push("Allowance Type Name");
       if (!appliesTo) missingFields.push("Applies To");
-      if (appliesTo !== "COMPANY" && !target) missingFields.push("Target Identifier");
+      if (appliesTo !== "COMPANY" && !target)
+        missingFields.push("Target Identifier");
       if (!value) missingFields.push("Value");
       if (!calculationType) missingFields.push("Calc Type");
       if (!isRecurring) missingFields.push("Is Recurring");
@@ -825,33 +924,49 @@ export const importAllowances = async (req, res) => {
       if (!startYear) missingFields.push("Start Year");
 
       if (missingFields.length > 0) {
-        errors.push(`Row ${rowNumber}: Missing required fields: ${missingFields.join(', ')}`);
+        errors.push(
+          `Row ${rowNumber}: Missing required fields: ${missingFields.join(", ")}`,
+        );
         continue;
       }
 
       // Validate applies_to
-      const validAppliesTo = ["INDIVIDUAL", "COMPANY", "DEPARTMENT", "SUB_DEPARTMENT", "JOB_TITLE"];
+      const validAppliesTo = [
+        "INDIVIDUAL",
+        "COMPANY",
+        "DEPARTMENT",
+        "SUB_DEPARTMENT",
+        "JOB_TITLE",
+      ];
       if (!validAppliesTo.includes(appliesTo)) {
-        errors.push(`Row ${rowNumber}: Invalid Applies To value "${appliesTo}". Must be one of: ${validAppliesTo.join(', ')}`);
+        errors.push(
+          `Row ${rowNumber}: Invalid Applies To value "${appliesTo}". Must be one of: ${validAppliesTo.join(", ")}`,
+        );
         continue;
       }
 
       // Validate month
       if (!isValidMonth(startMonth)) {
-        errors.push(`Row ${rowNumber}: Invalid month "${startMonth}". Must be one of: ${MONTHS.join(', ')}`);
+        errors.push(
+          `Row ${rowNumber}: Invalid month "${startMonth}". Must be one of: ${MONTHS.join(", ")}`,
+        );
         continue;
       }
 
       // Validate year
       if (isNaN(startYear) || startYear < 1900 || startYear > 2100) {
-        errors.push(`Row ${rowNumber}: Invalid year "${startYear}". Must be a valid 4-digit year.`);
+        errors.push(
+          `Row ${rowNumber}: Invalid year "${startYear}". Must be a valid 4-digit year.`,
+        );
         continue;
       }
 
       // Get type info
       const typeInfo = typeMap.get(typeName);
       if (!typeInfo) {
-        errors.push(`Row ${rowNumber}: Allowance type "${typeName}" not found.`);
+        errors.push(
+          `Row ${rowNumber}: Allowance type "${typeName}" not found.`,
+        );
         continue;
       }
 
@@ -872,7 +987,9 @@ export const importAllowances = async (req, res) => {
       } else if (appliesTo === "SUB_DEPARTMENT") {
         targetId = subMap.get(target);
         if (!targetId) {
-          errors.push(`Row ${rowNumber}: Sub-department "${target}" not found.`);
+          errors.push(
+            `Row ${rowNumber}: Sub-department "${target}" not found.`,
+          );
           continue;
         }
       } else if (appliesTo === "JOB_TITLE") {
@@ -885,32 +1002,51 @@ export const importAllowances = async (req, res) => {
 
       // Validate calculation type
       if (!["FIXED", "PERCENTAGE"].includes(calculationType)) {
-        errors.push(`Row ${rowNumber}: Calculation type must be FIXED or PERCENTAGE, got "${calculationType}"`);
+        errors.push(
+          `Row ${rowNumber}: Calculation type must be FIXED or PERCENTAGE, got "${calculationType}"`,
+        );
         continue;
       }
 
       // Validate is_recurring
       let recurringBool;
       const recurringStr = String(isRecurring).toUpperCase();
-      if (recurringStr === "TRUE" || recurringStr === "YES" || recurringStr === "1") {
+      if (
+        recurringStr === "TRUE" ||
+        recurringStr === "YES" ||
+        recurringStr === "1"
+      ) {
         recurringBool = true;
-      } else if (recurringStr === "FALSE" || recurringStr === "NO" || recurringStr === "0") {
+      } else if (
+        recurringStr === "FALSE" ||
+        recurringStr === "NO" ||
+        recurringStr === "0"
+      ) {
         recurringBool = false;
       } else {
-        errors.push(`Row ${rowNumber}: Is Recurring must be TRUE or FALSE, got "${isRecurring}"`);
+        errors.push(
+          `Row ${rowNumber}: Is Recurring must be TRUE or FALSE, got "${isRecurring}"`,
+        );
         continue;
       }
 
       // Validate value is a number
       const numericValue = parseFloat(value);
       if (isNaN(numericValue) || numericValue < 0) {
-        errors.push(`Row ${rowNumber}: Value must be a positive number, got "${value}"`);
+        errors.push(
+          `Row ${rowNumber}: Value must be a positive number, got "${value}"`,
+        );
         continue;
       }
 
       // Validate months if provided
-      if (numberOfMonths !== null && (isNaN(numberOfMonths) || numberOfMonths < 1)) {
-        errors.push(`Row ${rowNumber}: Duration must be a positive number, got "${numberOfMonths}"`);
+      if (
+        numberOfMonths !== null &&
+        (isNaN(numberOfMonths) || numberOfMonths < 1)
+      ) {
+        errors.push(
+          `Row ${rowNumber}: Duration must be a positive number, got "${numberOfMonths}"`,
+        );
         continue;
       }
 
@@ -920,7 +1056,9 @@ export const importAllowances = async (req, res) => {
         try {
           metadata = JSON.parse(metadataStr);
         } catch (e) {
-          errors.push(`Row ${rowNumber}: Invalid JSON in Metadata field: "${metadataStr}"`);
+          errors.push(
+            `Row ${rowNumber}: Invalid JSON in Metadata field: "${metadataStr}"`,
+          );
           continue;
         }
       }
@@ -930,9 +1068,9 @@ export const importAllowances = async (req, res) => {
       let endYear = null;
       if (!recurringBool && numberOfMonths) {
         const { endMonth: eMonth, endYear: eYear } = calculateEndPeriod(
-          startMonth, 
-          startYear, 
-          numberOfMonths
+          startMonth,
+          startYear,
+          numberOfMonths,
         );
         endMonth = eMonth;
         endYear = eYear;
@@ -955,14 +1093,14 @@ export const importAllowances = async (req, res) => {
         number_of_months: numberOfMonths,
         end_month: endMonth,
         end_year: endYear,
-        metadata: metadata
+        metadata: metadata,
       });
     }
 
     if (errors.length > 0) {
       return res.status(400).json({
         error: "Import failed due to validation errors.",
-        details: errors
+        details: errors,
       });
     }
 
@@ -985,9 +1123,10 @@ export const importAllowances = async (req, res) => {
       message: `Successfully imported ${data.length} allowance(s).`,
       count: data.length,
     });
-
   } catch (error) {
     console.error("Import allowances controller error:", error);
-    res.status(500).json({ error: error.message || "Failed to import allowances" });
+    res
+      .status(500)
+      .json({ error: error.message || "Failed to import allowances" });
   }
 };

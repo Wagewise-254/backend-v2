@@ -17,7 +17,8 @@ import {
     getEmployeeStatusHistory,
     getEmployeeContractHistory,
     addSalaryChange,
-    addStatusChange
+    addStatusChange,
+    exportEmployees
 } from '../controllers/employeeController.js';
 
 const router = express.Router();
@@ -25,6 +26,7 @@ const upload = multer();
 
 router.get('/:companyId/employees', verifyToken, getEmployees);
 router.get('/:companyId/employees/template', verifyToken, generateEmployeeTemplate);
+router.get('/:companyId/employees/export', verifyToken, exportEmployees);
 router.get('/:companyId/employees/:employeeId', verifyToken, getEmployeeById);
 // History endpoints
 router.get('/:companyId/employees/:employeeId/salary-history', verifyToken, getEmployeeSalaryHistory);

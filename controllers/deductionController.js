@@ -454,8 +454,9 @@ export const generateDeductionTemplate = async (req, res) => {
     ] = await Promise.all([
       supabase
         .from("employees")
-        .select("employee_number, first_name, last_name")
-        .eq("company_id", companyId),
+        .select("employee_number, first_name, last_name, employee_status")
+        .eq("company_id", companyId)
+        .in("employee_status", ["ACTIVE", "ON LEAVE"]), // Only include active and on-leave employees
       supabase
         .from("deduction_types")
         .select("name, code, is_pre_tax")
@@ -526,7 +527,7 @@ export const generateDeductionTemplate = async (req, res) => {
 
     // Add sample row with instructions
     mainSheet.addRow([
-      "SHIF",
+      "Advance",
       "INDIVIDUAL",
       "EMP001",
       "1700",
@@ -535,7 +536,7 @@ export const generateDeductionTemplate = async (req, res) => {
       "January", 
       "2024", 
       "12", 
-      '{"notes": "Monthly SHIF deduction"}',
+      '{"notes": "Monthly Advance deduction"}',
     ]);
 
     // Add empty rows for data entry (up to 1000 rows)
@@ -559,11 +560,28 @@ export const generateDeductionTemplate = async (req, res) => {
     refSheet.getCell('A1').value = 'EMPLOYEES';
     refSheet.getCell('A2').value = 'Employee Number';
     refSheet.getCell('B2').value = 'Full Name';
+    refSheet.getCell('C2').value = 'Status';
     
     employees.forEach((emp, index) => {
       const rowNum = index + 3;
       refSheet.getCell(`A${rowNum}`).value = emp.employee_number;
       refSheet.getCell(`B${rowNum}`).value = `${emp.first_name} ${emp.last_name}`.trim();
+      refSheet.getCell(`C${rowNum}`).value = emp.employee_status;
+
+      //  Color code the status
+      if (emp.employee_status === 'ON LEAVE') {
+        refSheet.getCell(`C${rowNum}`).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFE699' } // Light yellow for on leave
+        };
+      } else if (emp.employee_status === 'ACTIVE') {
+        refSheet.getCell(`C${rowNum}`).fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFC6EFCE' } // Light green for active
+        };
+      }
     });
 
     // Add Departments section
@@ -598,18 +616,19 @@ export const generateDeductionTemplate = async (req, res) => {
       refSheet.getCell(`J${index + 3}`).value = month;
     });
 
-    // Style reference sheet columns
+   // Style reference sheet columns
     refSheet.columns = [
       { width: 20 }, // A: Employee Number
       { width: 30 }, // B: Full Name
-      { width: 5 },  // C: Spacer
-      { width: 25 }, // D: Department Name
-      { width: 5 },  // E: Spacer
-      { width: 25 }, // F: Sub-Department Name
-      { width: 5 },  // G: Spacer
-      { width: 25 }, // H: Job Title
-      { width: 5 },  // I: Spacer
-      { width: 20 }, // J: Months
+      { width: 15 }, // C: Status
+      { width: 5 },  // D: Spacer
+      { width: 25 }, // E: Department Name
+      { width: 5 },  // F: Spacer
+      { width: 25 }, // G: Sub-Department Name
+      { width: 5 },  // H: Spacer
+      { width: 25 }, // I: Job Title
+      { width: 5 },  // J: Spacer
+      { width: 20 }, // K: Months
     ];
 
     // Protect reference sheet
@@ -703,45 +722,31 @@ export const generateDeductionTemplate = async (req, res) => {
 
     // Add notes sheet
     const notesSheet = workbook.addWorksheet("Instructions");
-    notesSheet.getCell("A1").value = "INSTRUCTIONS FOR BULK DEDUCTION IMPORT";
-    notesSheet.getCell("A1").font = { bold: true, size: 14 };
-
-    notesSheet.getCell("A3").value =
-      '1. Use the "Deductions" sheet to enter your data';
-    notesSheet.getCell("A4").value =
-      '2. Use the "Reference (Read Only)" sheet to see available deduction types, employees, departments, etc.';
-    notesSheet.getCell("A5").value = "3. Column explanations:";
-    notesSheet.getCell("A6").value =
-      "   - Deduction Type Name: Select from dropdown (based on your configured deduction types)";
-    notesSheet.getCell("A7").value =
-      "   - Applies To: Select who this deduction applies to (INDIVIDUAL, COMPANY, DEPARTMENT, SUB_DEPARTMENT, JOB_TITLE)";
-    notesSheet.getCell("A8").value =
-      "   - Target Identifier: Based on Applies To selection:";
-    notesSheet.getCell("A9").value =
-      "     * For INDIVIDUAL: Use Employee Number (see Reference sheet)";
-    notesSheet.getCell("A10").value =
-      "     * For DEPARTMENT: Use Department Name (see Reference sheet)";
-    notesSheet.getCell("A11").value =
-      "     * For SUB_DEPARTMENT: Use Sub-Department Name (see Reference sheet)";
-    notesSheet.getCell("A12").value =
-      "     * For JOB_TITLE: Use Job Title (see Reference sheet)";
-    notesSheet.getCell("A13").value =
-      '     * For COMPANY: Leave blank or enter "COMPANY"';
-    notesSheet.getCell("A14").value =
-      "   - Value: Numeric value for the deduction";
-    notesSheet.getCell("A15").value =
-      "   - Calc Type: FIXED (fixed amount) or PERCENTAGE (percentage of basic salary)";
-    notesSheet.getCell("A16").value =
-      "   - Is Recurring: TRUE (repeats monthly) or FALSE (one-time)";
-    notesSheet.getCell("A17").value =
-      "   - Start Month: Select from dropdown (January-December)";
-    notesSheet.getCell("A18").value =
-      "   - Start Year: 4-digit year (e.g., 2024)";
-    notesSheet.getCell("A19").value =
-      "   - Duration: For non-recurring, number of months (optional)";
-      notesSheet.getCell('A20').value = '   - Metadata: JSON format for additional data (optional)';
-    notesSheet.getCell("A22").value =
-      "4. All fields except Duration and Metadata are required";
+    notesSheet.getCell('A1').value = 'INSTRUCTIONS FOR BULK DEDUCTION IMPORT';
+    notesSheet.getCell('A1').font = { bold: true, size: 14 };
+    
+    notesSheet.getCell('A3').value = '1. Use the "Deductions" sheet to enter your data';
+    notesSheet.getCell('A4').value = '2. Use the "Reference (Read Only)" sheet to see available employees, departments, etc.';
+    notesSheet.getCell('A5').value = '3. Only ACTIVE and ON LEAVE employees are shown in the reference sheet';
+    notesSheet.getCell('A6').value = '4. Column explanations:';
+    notesSheet.getCell('A7').value = '   - Deduction Type Name: Select from dropdown (based on your configured deduction types)';
+    notesSheet.getCell('A8').value = '   - Applies To: Select who this deduction applies to';
+    notesSheet.getCell('A9').value = '   - Target Identifier: Based on Applies To selection:';
+    notesSheet.getCell('A10').value = '     * INDIVIDUAL: Employee Number (see Reference sheet - only Active/On Leave)';
+    notesSheet.getCell('A11').value = '     * DEPARTMENT: Department Name (see Reference sheet)';
+    notesSheet.getCell('A12').value = '     * SUB_DEPARTMENT: Sub-Department Name (see Reference sheet)';
+    notesSheet.getCell('A13').value = '     * JOB_TITLE: Job Title (see Reference sheet)';
+    notesSheet.getCell('A14').value = '     * COMPANY: Leave blank or enter "COMPANY"';
+    notesSheet.getCell('A15').value = '   - Value: Numeric value for the deduction';
+    notesSheet.getCell('A16').value = '   - Calc Type: FIXED or PERCENTAGE';
+    notesSheet.getCell('A17').value = '   - Is Recurring: TRUE (repeats) or FALSE (one-time)';
+    notesSheet.getCell('A18').value = '   - Start Month: Select from dropdown (January-December)';
+    notesSheet.getCell('A19').value = '   - Start Year: 4-digit year (e.g., 2024)';
+    notesSheet.getCell('A20').value = '   - Duration: For non-recurring, number of months (optional)';
+    notesSheet.getCell('A21').value = '   - Metadata: JSON format for additional data (optional)';
+    
+    notesSheet.getCell('A23').value = '5. All fields except Duration and Metadata are required';
+    notesSheet.getCell('A24').value = '6. Employees with status TERMINATED or SUSPENDED are excluded from the reference list';
 
     // Style notes sheet
     notesSheet.columns = [{ width: 80 }];
