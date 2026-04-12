@@ -171,7 +171,7 @@ export const sendEmployeeEmail = async (req, res) => {
       .eq("id", companyId)
       .single();
 
-      if (companyError || !company) {
+    if (companyError || !company) {
       return res.status(403).json({ error: "Company not found" });
     }
 
@@ -206,10 +206,9 @@ export const sendEmployeeEmail = async (req, res) => {
       //messageId: result.id
     });
   } catch (emailError) {
-  console.error("Send email error:", emailError.message);
-  res.status(500).json({ error: "Failed to send emails" });
-}
-
+    console.error("Send email error:", emailError.message);
+    res.status(500).json({ error: "Failed to send emails" });
+  }
 };
 // Get a single employee by ID
 export const getEmployeeById = async (req, res) => {
@@ -291,7 +290,6 @@ export const addEmployee = async (req, res) => {
       });
     }
 
-
     // Get company user ID for history tracking
     const companyUser = await getCurrentCompanyUser(userId, companyId);
 
@@ -319,7 +317,8 @@ export const addEmployee = async (req, res) => {
       .insert({
         employee_id: newEmployee.id,
         salary: cleanEmployeeData.salary,
-        effective_date: cleanEmployeeData.hire_date || new Date().toISOString().split('T')[0],
+        effective_date:
+          cleanEmployeeData.hire_date || new Date().toISOString().split("T")[0],
         changed_by: companyUser.id,
         reason: "Initial salary setup",
         notes: "Employee created",
@@ -329,13 +328,16 @@ export const addEmployee = async (req, res) => {
       console.error("Failed to create salary history:", salaryHistoryError);
     }
 
-     // Track initial status in history
+    // Track initial status in history
     const { error: statusHistoryError } = await supabase
       .from("employee_status_history")
       .insert({
         employee_id: newEmployee.id,
         status: cleanEmployeeData.employee_status || "ACTIVE",
-        effective_date: cleanEmployeeData.employee_status_effective_date || employeeData.hire_date || new Date().toISOString().split('T')[0],
+        effective_date:
+          cleanEmployeeData.employee_status_effective_date ||
+          employeeData.hire_date ||
+          new Date().toISOString().split("T")[0],
         changed_by: companyUser.id,
         reason: "Initial status setup",
         notes: "Employee created",
@@ -353,7 +355,7 @@ export const addEmployee = async (req, res) => {
       });
     }
 
-     // Insert Contract Details and track in history
+    // Insert Contract Details and track in history
     if (contract_details) {
       const { data: newContract, error: contractError } = await supabase
         .from("employee_contracts")
@@ -379,7 +381,7 @@ export const addEmployee = async (req, res) => {
       }
     }
 
-     // Create audit log
+    // Create audit log
     await createAuditLog({
       entityType: "employees",
       entityId: newEmployee.id,
@@ -435,7 +437,8 @@ export const addSalaryChange = async (req, res) => {
       .insert({
         employee_id: employeeId,
         salary,
-        effective_date: effective_date || new Date().toISOString().split('T')[0],
+        effective_date:
+          effective_date || new Date().toISOString().split("T")[0],
         changed_by: companyUser.id,
         reason: reason || "Manual salary update",
         notes,
@@ -481,9 +484,9 @@ export const addStatusChange = async (req, res) => {
     // Update employee's current status
     const { data: updatedEmployee, error: updateError } = await supabase
       .from("employees")
-      .update({ 
+      .update({
         employee_status: status,
-        employee_status_effective_date: effective_date 
+        employee_status_effective_date: effective_date,
       })
       .eq("id", employeeId)
       .select()
@@ -497,7 +500,8 @@ export const addStatusChange = async (req, res) => {
       .insert({
         employee_id: employeeId,
         status,
-        effective_date: effective_date || new Date().toISOString().split('T')[0],
+        effective_date:
+          effective_date || new Date().toISOString().split("T")[0],
         changed_by: companyUser.id,
         reason: reason || "Manual status update",
         notes,
@@ -544,14 +548,33 @@ export const updateEmployee = async (req, res) => {
       });
     }
 
-     // Validate ALL UUID fields - convert empty strings to null
+    // Helper function to clean empty strings to null for date fields
+    const cleanDateField = (value) => {
+      if (!value || value === "" || value === "null" || value === "undefined") {
+        return null;
+      }
+      return value;
+    };
+
+    // Sanitize employee data - convert empty strings to null for UUID and date fields
     const sanitizedEmployeeData = {
       ...employeeData,
-      department_id: employeeData.department_id === "" ? null : employeeData.department_id,
-      sub_department_id: employeeData.sub_department_id === "" ? null : employeeData.sub_department_id,
-      job_title_id: employeeData.job_title_id === "" ? null : employeeData.job_title_id,
-      reports_to: employeeData.reports_to === "" ? null : employeeData.reports_to,
-      // Add any other UUID fields that might exist
+      department_id:
+        employeeData.department_id === "" ? null : employeeData.department_id,
+      sub_department_id:
+        employeeData.sub_department_id === ""
+          ? null
+          : employeeData.sub_department_id,
+      job_title_id:
+        employeeData.job_title_id === "" ? null : employeeData.job_title_id,
+      reports_to:
+        employeeData.reports_to === "" ? null : employeeData.reports_to,
+      // Clean date fields
+      date_of_birth: cleanDateField(employeeData.date_of_birth),
+      hire_date: cleanDateField(employeeData.hire_date),
+      employee_status_effective_date: cleanDateField(
+        employeeData.employee_status_effective_date,
+      ),
     };
 
     // Get current employee data for comparison and audit
@@ -574,7 +597,9 @@ export const updateEmployee = async (req, res) => {
       await supabase.from("employee_salary_history").insert({
         employee_id: employeeId,
         salary: sanitizedEmployeeData.salary,
-        effective_date: sanitizedEmployeeData.salary_effective_date || new Date().toISOString().split('T')[0],
+        effective_date:
+          sanitizedEmployeeData.salary_effective_date ||
+          new Date().toISOString().split("T")[0],
         changed_by: companyUser.id,
         reason: sanitizedEmployeeData.salary_change_reason || "Salary update",
         notes: sanitizedEmployeeData.salary_change_notes || null,
@@ -582,11 +607,15 @@ export const updateEmployee = async (req, res) => {
     }
 
     // Check if status changed
-    if (currentEmployee.employee_status !== sanitizedEmployeeData.employee_status) {
+    if (
+      currentEmployee.employee_status !== sanitizedEmployeeData.employee_status
+    ) {
       await supabase.from("employee_status_history").insert({
         employee_id: employeeId,
         status: sanitizedEmployeeData.employee_status,
-        effective_date: sanitizedEmployeeData.employee_status_effective_date || new Date().toISOString().split('T')[0],
+        effective_date:
+          sanitizedEmployeeData.employee_status_effective_date ||
+          new Date().toISOString().split("T")[0],
         changed_by: companyUser.id,
         reason: sanitizedEmployeeData.status_change_reason || "Status change",
         notes: sanitizedEmployeeData.status_change_notes || null,
@@ -622,7 +651,7 @@ export const updateEmployee = async (req, res) => {
       newData: updatedEmployee,
     });
 
-     res.status(200).json(updatedEmployee);
+    res.status(200).json(updatedEmployee);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -646,7 +675,8 @@ export const getEmployeeSalaryHistory = async (req, res) => {
 
     const { data, error } = await supabase
       .from("employee_salary_history")
-      .select(`
+      .select(
+        `
         *,
          changed_by_user:company_users!changed_by (
           id,
@@ -654,17 +684,18 @@ export const getEmployeeSalaryHistory = async (req, res) => {
           email,
           user_id
         )
-      `)
+      `,
+      )
       .eq("employee_id", employeeId)
       .order("effective_date", { ascending: false })
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
-     // Transform to ensure consistent structure
-    const transformedData = data.map(item => ({
+    // Transform to ensure consistent structure
+    const transformedData = data.map((item) => ({
       ...item,
-      changed_by_user: item.changed_by_user || null
+      changed_by_user: item.changed_by_user || null,
     }));
 
     res.status(200).json(transformedData);
@@ -691,7 +722,8 @@ export const getEmployeeStatusHistory = async (req, res) => {
 
     const { data, error } = await supabase
       .from("employee_status_history")
-      .select(`
+      .select(
+        `
         *,
         changed_by_user:company_users!changed_by (
           id,
@@ -699,17 +731,18 @@ export const getEmployeeStatusHistory = async (req, res) => {
           email,
           user_id
         )
-      `)
+      `,
+      )
       .eq("employee_id", employeeId)
       .order("effective_date", { ascending: false })
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
-   // Transform to ensure consistent structure
-    const transformedData = data.map(item => ({
+    // Transform to ensure consistent structure
+    const transformedData = data.map((item) => ({
       ...item,
-      changed_by_user: item.changed_by_user || null
+      changed_by_user: item.changed_by_user || null,
     }));
 
     res.status(200).json(transformedData);
@@ -736,7 +769,8 @@ export const getEmployeeContractHistory = async (req, res) => {
 
     const { data, error } = await supabase
       .from("employee_contract_history")
-      .select(`
+      .select(
+        `
         *,
         changed_by_user:company_users!changed_by (
           id,
@@ -744,16 +778,17 @@ export const getEmployeeContractHistory = async (req, res) => {
           email,
           user_id
         )
-      `)
+      `,
+      )
       .eq("employee_id", employeeId)
       .order("created_at", { ascending: false });
 
     if (error) throw error;
 
     // Transform to ensure consistent structure
-    const transformedData = data.map(item => ({
+    const transformedData = data.map((item) => ({
       ...item,
-      changed_by_user: item.changed_by_user || null
+      changed_by_user: item.changed_by_user || null,
     }));
 
     res.status(200).json(transformedData);
@@ -761,7 +796,6 @@ export const getEmployeeContractHistory = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
-
 
 // backend/controllers/employeeController.js
 
@@ -771,7 +805,12 @@ export const updateSectionEmployee = async (req, res) => {
   const updateData = req.body;
 
   try {
-    const isAuthorized = await checkCompanyAccess(companyId, userId, "EMPLOYEES", "can_write");
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
     if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
 
     // 1. Update main Employee table
@@ -799,12 +838,15 @@ export const updateSectionEmployee = async (req, res) => {
     if (updateData.bank_details) {
       const { error: payError } = await supabase
         .from("employee_payment_details")
-        .upsert({
-          employee_id: employeeId,
-          ...updateData.bank_details,
-          updated_at: new Date()
-        }, { onConflict: 'employee_id' });
-      
+        .upsert(
+          {
+            employee_id: employeeId,
+            ...updateData.bank_details,
+            updated_at: new Date(),
+          },
+          { onConflict: "employee_id" },
+        );
+
       if (payError) throw payError;
     }
 
@@ -815,7 +857,7 @@ export const updateSectionEmployee = async (req, res) => {
         .update(updateData.contract_details)
         .eq("employee_id", employeeId)
         .eq("contract_status", "ACTIVE");
-      
+
       if (conError) throw conError;
     }
 
@@ -833,7 +875,12 @@ export const updatePaymentDetails = async (req, res) => {
   const paymentData = req.body;
 
   try {
-    const isAuthorized = await checkCompanyAccess(companyId, userId, "EMPLOYEES", "can_write");
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
     if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
 
     const { data, error } = await supabase
@@ -859,7 +906,12 @@ export const createPaymentDetails = async (req, res) => {
   const paymentData = req.body;
 
   try {
-    const isAuthorized = await checkCompanyAccess(companyId, userId, "EMPLOYEES", "can_write");
+    const isAuthorized = await checkCompanyAccess(
+      companyId,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
     if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
 
     const { data, error } = await supabase
@@ -890,25 +942,83 @@ export const updateContract = async (req, res) => {
       .eq("id", employeeId)
       .single();
 
-    const isAuthorized = await checkCompanyAccess(employee.company_id, userId, "EMPLOYEES", "can_write");
+    const isAuthorized = await checkCompanyAccess(
+      employee.company_id,
+      userId,
+      "EMPLOYEES",
+      "can_write",
+    );
     if (!isAuthorized) return res.status(403).json({ error: "Unauthorized." });
 
-    const { data, error } = await supabase
+    // Clean date fields - convert empty strings to null
+    const cleanDateField = (value) => {
+      if (!value || value === "" || value === "null" || value === "undefined") {
+        return null;
+      }
+      return value;
+    };
+
+    const sanitizedContractData = {
+      ...contractData,
+      end_date: cleanDateField(contractData.end_date),
+      probation_end_date: cleanDateField(contractData.probation_end_date),
+    };
+
+    // Get current contract data before update for history tracking
+    const { data: currentContract, error: fetchError } = await supabase
       .from("employee_contracts")
-      .update(contractData)
+      .select("*")
+      .eq("id", contractId)
+      .eq("employee_id", employeeId)
+      .single();
+
+    if (fetchError) {
+      return res.status(404).json({ error: "Contract not found." });
+    }
+
+    const { data, error: updateError } = await supabase
+      .from("employee_contracts")
+      .update(sanitizedContractData)
       .eq("id", contractId)
       .eq("employee_id", employeeId)
       .select()
       .single();
 
-    if (error) throw error;
+    if (updateError) {
+      console.error("Update contract error:", updateError);
+      throw updateError;
+    }
+
+    // Track contract in history if significant changes were made
+    const companyUser = await getCurrentCompanyUser(userId, employee.company_id);
+    
+    await supabase.from("employee_contract_history").insert({
+      employee_id: employeeId,
+      contract_type: data.contract_type,
+      start_date: data.start_date,
+      end_date: data.end_date,
+      probation_end_date: data.probation_end_date,
+      contract_status: data.contract_status,
+      changed_by: companyUser.id,
+      reason: "Contract updated via edit",
+    });
+
+     // Create audit log
+    await createAuditLog({
+      entityType: "employee_contracts",
+      entityId: contractId,
+      action: "UPDATE",
+      performedBy: userId,
+      oldData: currentContract,
+      newData: data,
+    });
+
     res.status(200).json(data);
   } catch (error) {
     console.error("Update contract error:", error);
     res.status(500).json({ error: error.message });
   }
 };
-
 
 // Delete an employee
 export const deleteEmployee = async (req, res) => {
@@ -968,7 +1078,7 @@ export const importEmployees = async (req, res) => {
   }
 
   try {
-   const isAuthorized = await checkCompanyAccess(
+    const isAuthorized = await checkCompanyAccess(
       companyId,
       userId,
       "EMPLOYEES",
@@ -1330,7 +1440,6 @@ export const importEmployees = async (req, res) => {
     const salaryHistoryRecords = [];
     const statusHistoryRecords = [];
     const contractHistoryRecords = [];
-    
 
     insertedEmployees.forEach((emp) => {
       const originalData = employeesToInsert.find(
@@ -1338,11 +1447,12 @@ export const importEmployees = async (req, res) => {
       );
 
       if (originalData) {
-         // Salary history
+        // Salary history
         salaryHistoryRecords.push({
           employee_id: emp.id,
           salary: emp.salary,
-          effective_date: emp.hire_date || new Date().toISOString().split('T')[0],
+          effective_date:
+            emp.hire_date || new Date().toISOString().split("T")[0],
           changed_by: companyUser.id,
           reason: "Bulk import - initial salary",
         });
@@ -1351,7 +1461,8 @@ export const importEmployees = async (req, res) => {
         statusHistoryRecords.push({
           employee_id: emp.id,
           status: emp.employee_status || "ACTIVE",
-          effective_date: emp.hire_date || new Date().toISOString().split('T')[0],
+          effective_date:
+            emp.hire_date || new Date().toISOString().split("T")[0],
           changed_by: companyUser.id,
           reason: "Bulk import - initial status",
         });
@@ -1381,20 +1492,26 @@ export const importEmployees = async (req, res) => {
       }
     });
 
-     // Insert all history records
+    // Insert all history records
     if (salaryHistoryRecords.length > 0) {
-      await supabase.from("employee_salary_history").insert(salaryHistoryRecords);
-    }
-    
-    if (statusHistoryRecords.length > 0) {
-      await supabase.from("employee_status_history").insert(statusHistoryRecords);
-    }
-    
-    if (contractHistoryRecords.length > 0) {
-      await supabase.from("employee_contract_history").insert(contractHistoryRecords);
+      await supabase
+        .from("employee_salary_history")
+        .insert(salaryHistoryRecords);
     }
 
-     // Create audit log for bulk import
+    if (statusHistoryRecords.length > 0) {
+      await supabase
+        .from("employee_status_history")
+        .insert(statusHistoryRecords);
+    }
+
+    if (contractHistoryRecords.length > 0) {
+      await supabase
+        .from("employee_contract_history")
+        .insert(contractHistoryRecords);
+    }
+
+    // Create audit log for bulk import
     await createAuditLog({
       entityType: "employees",
       entityId: "BULK_IMPORT", // or you could create individual logs for each employee
@@ -1486,7 +1603,7 @@ export const generateEmployeeTemplate = async (req, res) => {
   const userId = req.userId;
 
   try {
-   const isAuthorized = await checkCompanyAccess(
+    const isAuthorized = await checkCompanyAccess(
       companyId,
       userId,
       "EMPLOYEES",
@@ -1702,7 +1819,7 @@ export const exportEmployees = async (req, res) => {
         job_titles (title),
         employee_payment_details (*),
         employee_contracts (*)
-      `
+      `,
       )
       .eq("company_id", companyId)
       .order("employee_number", { ascending: true });
@@ -1713,36 +1830,39 @@ export const exportEmployees = async (req, res) => {
     }
 
     // Prepare data for Excel
-    const exportData = employees.map(emp => {
+    const exportData = employees.map((emp) => {
       // Get active contract (most recent)
-      const activeContract = emp.employee_contracts?.find(c => c.contract_status === "ACTIVE") || emp.employee_contracts?.[0];
-      
+      const activeContract =
+        emp.employee_contracts?.find((c) => c.contract_status === "ACTIVE") ||
+        emp.employee_contracts?.[0];
+
       return {
         "Employee Number": emp.employee_number || "",
         "First Name": emp.first_name || "",
         "Middle Name": emp.middle_name || "",
         "Last Name": emp.last_name || "",
-        "Email": emp.email || "",
-        "Phone": emp.phone || "",
+        Email: emp.email || "",
+        Phone: emp.phone || "",
         "Date of Birth": emp.date_of_birth || "",
-        "Gender": emp.gender || "",
+        Gender: emp.gender || "",
         "Blood Group": emp.blood_group || "",
         "Marital Status": emp.marital_status || "",
         "Hire Date": emp.hire_date || "",
-        "Department": emp.departments?.name || "",
+        Department: emp.departments?.name || "",
         "Sub Department": emp.sub_departments?.name || "",
         "Job Title": emp.job_titles?.title || "",
         "Job Type": emp.job_type || "",
         "Employee Status": emp.employee_status || "",
-        "Employee Status Effective Date": emp.employee_status_effective_date || "",
+        "Employee Status Effective Date":
+          emp.employee_status_effective_date || "",
         "ID Type": emp.id_type || "",
         "ID Number": emp.id_number || "",
         "KRA PIN": emp.krapin || "",
         "SHIF Number": emp.shif_number || "",
         "NSSF Number": emp.nssf_number || "",
-        "Citizenship": emp.citizenship || "",
+        Citizenship: emp.citizenship || "",
         "Has Disability": emp.has_disability ? "Yes" : "No",
-        "Salary": emp.salary || 0,
+        Salary: emp.salary || 0,
         "Employee Type": emp.employee_type || "",
         "Pays PAYE": emp.pays_paye ? "Yes" : "No",
         "Pays NSSF": emp.pays_nssf ? "Yes" : "No",
@@ -1754,12 +1874,14 @@ export const exportEmployees = async (req, res) => {
         "Contract End Date": activeContract?.end_date || "",
         "Probation End Date": activeContract?.probation_end_date || "",
         "Contract Status": activeContract?.contract_status || "",
-        "Payment Method": emp.employee_payment_details?.[0]?.payment_method || "",
+        "Payment Method":
+          emp.employee_payment_details?.[0]?.payment_method || "",
         "Bank Name": emp.employee_payment_details?.[0]?.bank_name || "",
         "Bank Code": emp.employee_payment_details?.[0]?.bank_code || "",
         "Branch Name": emp.employee_payment_details?.[0]?.branch_name || "",
         "Branch Code": emp.employee_payment_details?.[0]?.branch_code || "",
-        "Account Number": emp.employee_payment_details?.[0]?.account_number || "",
+        "Account Number":
+          emp.employee_payment_details?.[0]?.account_number || "",
         "Account Name": emp.employee_payment_details?.[0]?.account_name || "",
         "Mobile Type": emp.employee_payment_details?.[0]?.mobile_type || "",
         "Mobile Phone": emp.employee_payment_details?.[0]?.phone_number || "",
@@ -1826,7 +1948,7 @@ export const exportEmployees = async (req, res) => {
     const filename = `employees_export_${new Date().toISOString().split("T")[0]}.xlsx`;
     res.setHeader(
       "Content-Type",
-      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     );
     res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
 
@@ -1842,7 +1964,6 @@ export const exportEmployees = async (req, res) => {
       performedBy: userId,
       newData: { count: employees.length, companyId },
     });
-
   } catch (error) {
     console.error("Export employees error:", error);
     res.status(500).json({ error: error.message });

@@ -200,6 +200,7 @@ export const getPayrollEligibility = async (req, res) => {
         id: employee.id,
         employee_number: employee.employee_number,
         first_name: employee.first_name,
+        middle_name: employee.middle_name,
         last_name: employee.last_name,
         email: employee.email,
         department: employee.department?.name,
@@ -266,7 +267,7 @@ export const getPayrollEligibility = async (req, res) => {
 // Save overrides for payroll eligibility
 export const savePayrollOverrides = async (req, res) => {
   const { companyId } = req.params;
-  const { month, year, overrides } = req.body;
+  const { month, year, overrides, forceUpdate } = req.body;
   const userId = req.userId;
   
   if (!month || !year || !overrides || !Array.isArray(overrides)) {
@@ -321,9 +322,11 @@ export const savePayrollOverrides = async (req, res) => {
       .eq("status", "CONFIRMED")
       .maybeSingle();
     
-    if (confirmation) {
+    // If confirmed and not forcing update, block
+    if (confirmation && !forceUpdate) {
       return res.status(403).json({ 
-        error: "Payroll eligibility has already been confirmed and cannot be modified." 
+        error: "Payroll eligibility has already been confirmed and cannot be modified.",
+        requiresForceUpdate: true
       });
     }
     
@@ -555,6 +558,7 @@ export const getConfirmedEmployees = async (req, res) => {
           id,
           employee_number,
           first_name,
+          middle_name,
           last_name,
           email,
           salary,
@@ -579,5 +583,253 @@ export const getConfirmedEmployees = async (req, res) => {
   } catch (error) {
     console.error("Error getting confirmed employees:", error);
     res.status(500).json({ error: "Failed to fetch confirmed employees." });
+  }
+};
+
+
+// Unconfirm eligibility to allow edits
+export const unconfirmPayrollEligibility = async (req, res) => {
+  const { companyId } = req.params;
+  const { payrollRunId, reason } = req.body;
+  const userId = req.userId;
+  
+  if (!payrollRunId) {
+    return res.status(400).json({ error: "Payroll run ID is required." });
+  }
+  
+  try {
+    // Verify payroll run exists and belongs to company
+    const { data: payrollRun, error: runError } = await supabase
+      .from("payroll_runs")
+      .select("id, status")
+      .eq("id", payrollRunId)
+      .eq("company_id", companyId)
+      .single();
+    
+    if (runError || !payrollRun) {
+      return res.status(404).json({ error: "Payroll run not found." });
+    }
+    
+    // Only allow unconfirming for DRAFT or UNDER_REVIEW status
+    if (!["DRAFT", "UNDER_REVIEW"].includes(payrollRun.status)) {
+      return res.status(403).json({ 
+        error: `Cannot modify eligibility for payroll with status: ${payrollRun.status}`,
+        message: "Payroll must be in DRAFT or UNDER_REVIEW status to edit eligibility."
+      });
+    }
+    
+    // Check if confirmation exists
+    const { data: confirmation, error: confError } = await supabase
+      .from("payroll_eligibility_confirmation")
+      .select("id, status")
+      .eq("payroll_run_id", payrollRunId)
+      .eq("status", "CONFIRMED")
+      .maybeSingle();
+    
+    if (!confirmation) {
+      return res.status(409).json({ 
+        error: "Eligibility is not confirmed",
+        message: "No confirmed eligibility record found for this payroll run."
+      });
+    }
+    
+    // Update confirmation to CANCELLED
+    const { error: updateError } = await supabase
+      .from("payroll_eligibility_confirmation")
+      .update({
+        status: "CANCELLED",
+        notes: `Unconfirmed by user on ${new Date().toISOString()}. Reason: ${reason || "Not provided"}`
+      })
+      .eq("id", confirmation.id);
+    
+    if (updateError) throw updateError;
+    
+    // Optional: Keep overrides but mark them as editable
+    // We're not deleting them so user can see previous overrides
+    
+    res.status(200).json({
+      message: "Eligibility unconfirmed successfully",
+      payroll_run_id: payrollRunId,
+      can_edit: true
+    });
+    
+  } catch (error) {
+    console.error("Error unconfirming eligibility:", error);
+    res.status(500).json({ error: "Failed to unconfirm eligibility." });
+  }
+};
+
+// Get eligibility with edit mode flag
+export const getPayrollEligibilityWithEdit = async (req, res) => {
+  const { companyId } = req.params;
+  const { month: payrollMonth, year: payrollYear, editMode } = req.query;
+  const userId = req.userId;
+  
+  if (!payrollMonth || !payrollYear) {
+    return res.status(400).json({ error: "Month and year are required." });
+  }
+  
+  if (!monthNames.includes(payrollMonth)) {
+    return res.status(400).json({ 
+      error: `Invalid month. Must be one of: ${monthNames.join(", ")}` 
+    });
+  }
+  
+  try {
+    // Get existing payroll run
+    const { data: existingRun } = await supabase
+      .from("payroll_runs")
+      .select("id, status, payroll_number")
+      .eq("company_id", companyId)
+      .eq("payroll_month", payrollMonth)
+      .eq("payroll_year", parseInt(payrollYear))
+      .maybeSingle();
+    
+    let isConfirmed = false;
+    let confirmationData = null;
+    let canEdit = editMode === 'true';
+    
+    if (existingRun) {
+      const { data: confirmation } = await supabase
+        .from("payroll_eligibility_confirmation")
+        .select("*")
+        .eq("payroll_run_id", existingRun.id)
+        .eq("status", "CONFIRMED")
+        .maybeSingle();
+      
+      if (confirmation) {
+        isConfirmed = true;
+        confirmationData = confirmation;
+        // Can edit if explicitly requested or if run is in DRAFT/UNDER_REVIEW
+        canEdit = canEdit || ["DRAFT", "UNDER_REVIEW"].includes(existingRun.status);
+      }
+    }
+    
+    // Fetch all employees with their relations
+    const { data: employees, error: employeesError } = await supabase
+      .from("employees")
+      .select(`
+        *,
+        employee_contracts (
+          id,
+          contract_type,
+          start_date,
+          end_date,
+          contract_status
+        ),
+        employee_payment_details (
+          payment_method,
+          bank_name,
+          bank_code,
+          branch_name,
+          account_number,
+          phone_number
+        ),
+        department:department_id (
+          id,
+          name
+        ),
+        job_title:job_title_id (
+          id,
+          title
+        )
+      `)
+      .eq("company_id", companyId);
+    
+    if (employeesError) throw new Error("Failed to fetch employees.");
+    
+    // Get existing overrides
+    let overrides = [];
+    if (existingRun) {
+      const { data: existingEligibility } = await supabase
+        .from("payroll_eligibility")
+        .select("*")
+        .eq("payroll_run_id", existingRun.id);
+      
+      if (existingEligibility) {
+        overrides = existingEligibility.filter(e => e.is_overridden);
+      }
+    }
+    
+    // Calculate eligibility for each employee
+    const eligibleEmployees = [];
+    const ineligibleEmployees = [];
+    
+    for (const employee of employees) {
+      // Check if there's an override
+      const existingOverride = overrides.find(o => o.employee_id === employee.id);
+      
+      let eligibility;
+      if (existingOverride && canEdit) {
+        // Use existing override if in edit mode
+        eligibility = {
+          is_eligible: existingOverride.is_eligible,
+          reason: existingOverride.eligibility_reason,
+          details: existingOverride.eligibility_details
+        };
+      } else {
+        eligibility = getEmployeeEligibilityDetails(employee, payrollMonth, parseInt(payrollYear));
+      }
+      
+      const employeeData = {
+        id: employee.id,
+        employee_number: employee.employee_number,
+        first_name: employee.first_name,
+        middle_name: employee.middle_name,
+        last_name: employee.last_name,
+        email: employee.email,
+        department: employee.department?.name,
+        job_title: employee.job_title?.title,
+        salary: employee.salary,
+        hire_date: employee.hire_date,
+        employee_status: employee.employee_status,
+        payment_method: employee.employee_payment_details?.payment_method,
+        eligibility_reason: eligibility.reason,
+        eligibility_details: eligibility.details,
+        is_eligible: eligibility.is_eligible
+      };
+      
+      if (eligibility.is_eligible) {
+        eligibleEmployees.push(employeeData);
+      } else {
+        ineligibleEmployees.push(employeeData);
+      }
+    }
+    
+    res.status(200).json({
+      payroll_period: {
+        month: payrollMonth,
+        year: parseInt(payrollYear)
+      },
+      existing_run: existingRun ? {
+        id: existingRun.id,
+        status: existingRun.status,
+        payroll_number: existingRun.payroll_number,
+        is_confirmed: isConfirmed,
+        can_edit: canEdit,
+        confirmed_at: confirmationData?.confirmed_at,
+        confirmed_by: confirmationData?.confirmed_by
+      } : null,
+      summary: {
+        total_employees: employees.length,
+        eligible_count: eligibleEmployees.length,
+        ineligible_count: ineligibleEmployees.length,
+        isConfirmed: isConfirmed,
+        canEdit: canEdit
+      },
+      eligible_employees: eligibleEmployees,
+      ineligible_employees: ineligibleEmployees,
+      overrides: overrides.map(o => ({
+        employee_id: o.employee_id,
+        is_eligible: o.is_eligible,
+        original_reason: o.eligibility_reason,
+        override_reason: o.override_reason,
+        eligibility_details: o.eligibility_details
+      }))
+    });
+    
+  } catch (error) {
+    console.error("Error getting payroll eligibility:", error);
+    res.status(500).json({ error: "Failed to determine payroll eligibility." });
   }
 };
