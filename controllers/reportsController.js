@@ -1300,6 +1300,7 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
       "NSSF",
       "SHIF",
       "HOUSING LEVY",
+      "HELB",
     ];
     const fixedHeadersAfterDeductions = ["TOTAL DED.", "NET PAY (KSH.)"];
 
@@ -1337,6 +1338,7 @@ const generateGenericExcelReport = async (data, reportType, companyDetails) => {
       PAYE: "paye_tax",
       NSSF: "nssf_deduction",
       SHIF: "shif_deduction",
+      HELB: "helb_deduction",
       "HOUSING LEVY": "housing_levy_deduction",
       "TOTAL DED.": "total_deductions",
       "NET PAY (KSH.)": "net_pay",
