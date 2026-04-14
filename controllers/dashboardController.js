@@ -363,8 +363,6 @@ export const getQuickActions = async (req, res) => {
       .single();
 
     const role = companyUser?.role || "VIEWER";
-    const isAdmin = role === "ADMIN";
-    const isReviewer = role === "REVIEWER";
 
     const actions = [
       {
@@ -373,7 +371,7 @@ export const getQuickActions = async (req, res) => {
         description: "Add a new employee to the system",
         icon: "UserPlus",
         url: `/company/${companyId}/employees/add-employee`,
-        allowedRoles: ["ADMIN", "HR"]
+        allowedRoles: ["ADMIN", "MANAGER"]
       },
       {
         id: "run_payroll",
@@ -381,7 +379,23 @@ export const getQuickActions = async (req, res) => {
         description: "Start a new payroll run",
         icon: "CreditCard",
         url: `/company/${companyId}/payroll/run`,
-        allowedRoles: ["ADMIN", "PAYROLL_MANAGER", "REVIEWER"]
+        allowedRoles: ["ADMIN", "MANAGER"]
+      },
+      {
+        id: "assign_deductions",
+        title: "Assign Deductions",
+        description: "Assign or modify employee deductions (Advance, SACCO, etc.)",
+        icon: "DollarSign",
+        url: `/company/${companyId}/payroll/deductions/assign`,
+        allowedRoles: ["ADMIN", "MANAGER"]
+      },
+       {
+        id: "assign_allowances",
+        title: "Assign Allowances",
+        description: "Assign or modify employee allowances (Housing, Transport, etc.)",
+        icon: "TrendingUp",
+        url: `/company/${companyId}/payroll/benefits/assign`,
+        allowedRoles: ["ADMIN", "MANAGER"]
       },
       {
         id: "view_reports",
@@ -389,32 +403,16 @@ export const getQuickActions = async (req, res) => {
         description: "Generate and view payroll reports",
         icon: "FileText",
         url: `/company/${companyId}/reports`,
-        allowedRoles: ["ADMIN", "PAYROLL_MANAGER", "REVIEWER", "VIEWER"]
+        allowedRoles: ["ADMIN", "MANAGER", "VIEWER"]
       },
       {
-        id: "manage_employees",
-        title: "Manage Employees",
-        description: "View and manage employee records",
-        icon: "Users",
-        url: `/company/${companyId}/employees`,
-        allowedRoles: ["ADMIN", "HR", "MANAGER"]
+        id: "Payslips",
+        title: "Payslips",
+        description: "View and download employee payslips",
+        icon: "Mail",
+        url: `/company/${companyId}/payroll/payslips`,
+        allowedRoles: ["ADMIN", "MANAGER", "VIEWER"]
       },
-      {
-        id: "organization_setup",
-        title: "Organization Setup",
-        description: "Configure departments and job titles",
-        icon: "Building2",
-        url: `/company/${companyId}/organization`,
-        allowedRoles: ["ADMIN"]
-      },
-      {
-        id: "payroll_settings",
-        title: "Payroll Settings",
-        description: "Configure benefits, deductions, and payroll rules",
-        icon: "Settings",
-        url: `/company/${companyId}/payroll/setup`,
-        allowedRoles: ["ADMIN", "PAYROLL_MANAGER"]
-      }
     ];
 
     // Filter actions based on user role
