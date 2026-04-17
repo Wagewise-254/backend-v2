@@ -403,6 +403,16 @@ export const syncPayroll = async (req, res) => {
       payrollRunId = newRunId;
     }
 
+    // After creating new payroll run, add:
+    await createAuditLog({
+      entityType: "payroll_run",
+      entityId: payrollRunId,
+      entityName: `Payroll Run ${payrollNumber} - ${payrollMonth} ${payrollYear}`,
+      action: "CREATE",
+      performedBy: userId,
+      companyId: companyId,
+    });
+
     // IMPORTANT FIX: Instead of deleting all records, we should UPSERT
     // First, get existing payroll details to check for duplicates
     const { data: existingDetails } = await supabase
@@ -1023,15 +1033,15 @@ async function resetEmployeeReviewsForUpdate(payrollDetailId) {
       .from("payroll_reviews")
       .select("id, status")
       .eq("payroll_detail_id", payrollDetailId);
-    
+
     if (fetchError) throw fetchError;
     if (!existingReviews || existingReviews.length === 0) return;
-    
+
     // Only reset reviews that were APPROVED or REJECTED
     const reviewsToReset = existingReviews.filter(
-      review => review.status !== "PENDING"
+      (review) => review.status !== "PENDING",
     );
-    
+
     if (reviewsToReset.length > 0) {
       const { error: updateError } = await supabase
         .from("payroll_reviews")
@@ -1039,18 +1049,22 @@ async function resetEmployeeReviewsForUpdate(payrollDetailId) {
           status: "PENDING",
           reviewed_at: null,
         })
-        .in("id", reviewsToReset.map(r => r.id));
-      
+        .in(
+          "id",
+          reviewsToReset.map((r) => r.id),
+        );
+
       if (updateError) throw updateError;
-      
-      console.log(`Reset ${reviewsToReset.length} reviews for payroll detail ${payrollDetailId}`);
+
+      console.log(
+        `Reset ${reviewsToReset.length} reviews for payroll detail ${payrollDetailId}`,
+      );
     }
   } catch (error) {
     console.error("Failed to reset reviews:", error);
     // Don't throw - we don't want to fail the entire sync
   }
 }
-
 
 // Helper function to reset reviews for an employee when data changes
 async function resetEmployeeReviews(payrollDetailId, existingReviews) {
@@ -1790,7 +1804,7 @@ export const getPayrollRun = async (req, res) => {
 
 // Update payroll status with validation
 export const updatePayrollStatus = async (req, res) => {
-  const { runId } = req.params;
+  const { companyId, runId } = req.params;
   const { status, reason } = req.body;
   const userId = req.userId;
   const currentStatus = req.payrollStatus;
@@ -1838,15 +1852,10 @@ export const updatePayrollStatus = async (req, res) => {
     await createAuditLog({
       entityType: "payroll_run",
       entityId: runId,
+      entityName: `Payroll Run ${runId} - Status changed from ${currentStatus} to ${status}`,
       action: status === "REJECTED" ? "REJECT" : "STATUS_CHANGE",
       performedBy: userId,
-      oldData: { status: currentStatus },
-      newData: {
-        status,
-        previous_status: currentStatus,
-        reason: reason || null, // Include reason if provided
-        timestamp: new Date().toISOString(),
-      },
+      companyId: companyId, // You'll need to extract companyId from params
     });
 
     res.status(200).json(data);
@@ -2024,15 +2033,10 @@ export const revertPayrollStatus = async (req, res) => {
     await createAuditLog({
       entityType: "payroll_run",
       entityId: runId,
+      entityName: `Payroll Run ${runId} - Reverted from ${payrollRun.status} to ${targetStatus}`,
       action: "REVERT",
       performedBy: userId,
-      oldData: { status: payrollRun.status },
-      newData: {
-        status: targetStatus,
-        previous_status: payrollRun.status,
-        reason: reason || "No reason provided",
-        timestamp: new Date().toISOString(),
-      },
+      companyId: req.params.companyId,
     });
 
     res.json({

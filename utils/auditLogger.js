@@ -1,4 +1,3 @@
-// utils/auditLogger.js
 import supabase from "../libs/supabaseClient.js";
 
 export const createAuditLog = async ({
@@ -6,27 +5,30 @@ export const createAuditLog = async ({
   entityId,
   action,
   performedBy,
-  oldData = null,
-  newData = null,
+  entityName = null, // Optional: store human-readable name
+  companyId,
 }) => {
-  // Ensure entityId is not null
   if (!entityId) {
     console.error('Cannot create audit log: entityId is required', { entityType, action });
+    return;
+  }
+
+   if (!companyId) {
+    console.error('Cannot create audit log: companyId is required', { entityType, action });
     return;
   }
 
   const { error } = await supabase.from("audit_logs").insert({
     entity_type: entityType,
     entity_id: entityId,
+    entity_name: entityName, // Store name for display
     action,
     performed_by: performedBy,
-    old_data: oldData,
-    new_data: newData,
+    company_id: companyId,
     created_at: new Date().toISOString()
   });
 
   if (error) {
     console.error("Failed to create audit log:", error);
-    // Don't throw - we don't want to fail the main operation if audit logging fails
   }
 };

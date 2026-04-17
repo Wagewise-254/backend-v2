@@ -200,6 +200,17 @@ export const sendEmployeeEmail = async (req, res) => {
       await new Promise((r) => setTimeout(r, 1200));
     }
 
+    // 4️ Log email sending as an audit log
+      await createAuditLog({
+      entityType: "employees_email",
+      entityId: companyId,
+      action: "CREATE",
+      performedBy: userId,
+      entityName: `Email sent to ${recipients.length} employees`,
+      companyId: companyId,
+    });
+
+
     res.status(200).json({
       success: true,
       sent: recipients.length,
@@ -385,13 +396,10 @@ export const addEmployee = async (req, res) => {
     await createAuditLog({
       entityType: "employees",
       entityId: newEmployee.id,
+      entityName: `${cleanEmployeeData.first_name} ${cleanEmployeeData.last_name} (${cleanEmployeeData.employee_number})`,
       action: "CREATE",
       performedBy: userId,
-      newData: {
-        ...cleanEmployeeData,
-        bank_details,
-        contract_details,
-      },
+      companyId: companyId, // Add this
     });
 
     res.status(201).json(newEmployee);
@@ -448,13 +456,21 @@ export const addSalaryChange = async (req, res) => {
 
     if (historyError) throw historyError;
 
+    // Get employee name first
+    const { data: emp } = await supabase
+      .from("employees")
+      .select("first_name, last_name, employee_number")
+      .eq("id", employeeId)
+      .single();
+
     // Audit log
     await createAuditLog({
       entityType: "employees",
       entityId: employeeId,
+      entityName: `Salary Change - ${emp.first_name} ${emp.last_name} (${emp.employee_number})`,
       action: "UPDATE",
       performedBy: userId,
-      newData: { salary_change: { salary, effective_date, reason } },
+      companyId: companyId,
     });
 
     res.status(201).json(history);
@@ -511,13 +527,22 @@ export const addStatusChange = async (req, res) => {
 
     if (historyError) throw historyError;
 
+    // Get employee name first
+    const { data: emp } = await supabase
+      .from("employees")
+      .select("first_name, last_name, employee_number")
+      .eq("id", employeeId)
+      .single();
+
+
     // Audit log
     await createAuditLog({
       entityType: "employees",
       entityId: employeeId,
       action: "UPDATE",
       performedBy: userId,
-      newData: { status_change: { status, effective_date, reason } },
+      entityName: `Status Change - ${emp.first_name} ${emp.last_name} (${emp.employee_number})`,
+      companyId: companyId,
     });
 
     res.status(201).json(history);
@@ -645,10 +670,10 @@ export const updateEmployee = async (req, res) => {
     await createAuditLog({
       entityType: "employees",
       entityId: employeeId,
+      entityName: `${updatedEmployee.first_name} ${updatedEmployee.last_name} (${updatedEmployee.employee_number})`,
       action: "UPDATE",
       performedBy: userId,
-      oldData: currentEmployee,
-      newData: updatedEmployee,
+      companyId: companyId,
     });
 
     res.status(200).json(updatedEmployee);
@@ -938,7 +963,7 @@ export const updateContract = async (req, res) => {
     // You'll need to get companyId from employee
     const { data: employee } = await supabase
       .from("employees")
-      .select("company_id")
+      .select("company_id, first_name, last_name, employee_number")
       .eq("id", employeeId)
       .single();
 
@@ -990,8 +1015,11 @@ export const updateContract = async (req, res) => {
     }
 
     // Track contract in history if significant changes were made
-    const companyUser = await getCurrentCompanyUser(userId, employee.company_id);
-    
+    const companyUser = await getCurrentCompanyUser(
+      userId,
+      employee.company_id,
+    );
+
     await supabase.from("employee_contract_history").insert({
       employee_id: employeeId,
       contract_type: data.contract_type,
@@ -1003,14 +1031,14 @@ export const updateContract = async (req, res) => {
       reason: "Contract updated via edit",
     });
 
-     // Create audit log
+    // Create audit log
     await createAuditLog({
       entityType: "employee_contracts",
       entityId: contractId,
+      entityName: `Contract for ${employee.first_name} ${employee.last_name} (${employee.employee_number}) - ${data.contract_type}`,
       action: "UPDATE",
       performedBy: userId,
-      oldData: currentContract,
-      newData: data,
+      companyId: employee.company_id,
     });
 
     res.status(200).json(data);
@@ -1041,7 +1069,7 @@ export const deleteEmployee = async (req, res) => {
     // Ownership checks similar to updateEmployee
     const { data: employee, error: employeeCheckError } = await supabase
       .from("employees")
-      .select("id, company_id")
+      .select("id, company_id, first_name, last_name, employee_number")
       .eq("id", employeeId)
       .eq("company_id", companyId)
       .single();
@@ -1052,6 +1080,15 @@ export const deleteEmployee = async (req, res) => {
         .json({ error: "Unauthorized or employee not found." });
     }
 
+    // Create audit log before deletion
+    await createAuditLog({
+      entityType: "employees",
+      entityId: employeeId,
+      entityName: `${employee.first_name} ${employee.last_name} (${employee.employee_number})`,
+      action: "DELETE",
+      performedBy: userId,
+      companyId: companyId,
+    });
     const { error } = await supabase
       .from("employees")
       .delete()
@@ -1514,10 +1551,11 @@ export const importEmployees = async (req, res) => {
     // Create audit log for bulk import
     await createAuditLog({
       entityType: "employees",
-      entityId: "BULK_IMPORT", // or you could create individual logs for each employee
+      entityId: "BULK_IMPORT",
+      entityName: `Bulk import - ${insertedEmployees.length} employees`,
       action: "CREATE",
       performedBy: userId,
-      newData: { count: insertedEmployees.length },
+      companyId: companyId,
     });
 
     // 2. Upsert Payment Details
@@ -1959,10 +1997,11 @@ export const exportEmployees = async (req, res) => {
     // Create audit log
     await createAuditLog({
       entityType: "employees",
-      entityId: "EXPORT",
+      entityId: companyId, // Can use companyId or a special value
+      entityName: `Bulk export - ${employees.length} employees`,
       action: "EXPORT",
       performedBy: userId,
-      newData: { count: employees.length, companyId },
+      companyId: companyId,
     });
   } catch (error) {
     console.error("Export employees error:", error);
