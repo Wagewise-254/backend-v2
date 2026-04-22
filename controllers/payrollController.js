@@ -368,6 +368,10 @@ export const syncPayroll = async (req, res) => {
 
   try {
     // Generate payroll number if new run
+    let auditPayrollNumber;
+    let auditPayrollMonth = payrollMonth;
+    let auditPayrollYear = payrollYear;
+
     if (isNewRun) {
       const { count } = await supabase
         .from("payroll_runs")
@@ -383,6 +387,8 @@ export const syncPayroll = async (req, res) => {
       );
       const sequence = String(payrollCount + 1).padStart(3, "0");
       const payrollNumber = `PR-${payrollYear}${monthNum}-${sequence}`;
+
+      auditPayrollNumber = payrollNumber;
 
       // Create new payroll run
       const newRunId = uuidv4();
@@ -401,13 +407,26 @@ export const syncPayroll = async (req, res) => {
 
       if (createError) throw createError;
       payrollRunId = newRunId;
-    }
+    } else {
+  // For existing runs, fetch the payroll number
+  const { data: existingRunData } = await supabase
+    .from("payroll_runs")
+    .select("payroll_number, payroll_month, payroll_year")
+    .eq("id", payrollRunId)
+    .single();
+  
+  if (existingRunData) {
+    auditPayrollNumber = existingRunData.payroll_number;
+    auditPayrollMonth = existingRunData.payroll_month;
+    auditPayrollYear = existingRunData.payroll_year;
+  }
+}
 
     // After creating new payroll run, add:
     await createAuditLog({
       entityType: "payroll_run",
       entityId: payrollRunId,
-      entityName: `Payroll Run ${payrollNumber} - ${payrollMonth} ${payrollYear}`,
+      entityName: `Payroll Run ${auditPayrollNumber} - ${auditPayrollMonth} ${auditPayrollYear}`,
       action: "CREATE",
       performedBy: userId,
       companyId: companyId,
