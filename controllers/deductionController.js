@@ -611,7 +611,7 @@ export const generateDeductionTemplate = async (req, res) => {
     ] = await Promise.all([
       supabase
         .from("employees")
-        .select("employee_number, first_name, last_name, employee_status")
+        .select("employee_number, first_name, middle_name, last_name, employee_status")
         .eq("company_id", companyId)
         .in("employee_status", ["ACTIVE", "ON LEAVE"]), // Only include active and on-leave employees
       supabase
@@ -722,7 +722,7 @@ export const generateDeductionTemplate = async (req, res) => {
     employees.forEach((emp, index) => {
       const rowNum = index + 3;
       refSheet.getCell(`A${rowNum}`).value = emp.employee_number;
-      refSheet.getCell(`B${rowNum}`).value = `${emp.first_name} ${emp.last_name}`.trim();
+      refSheet.getCell(`B${rowNum}`).value = `${emp.first_name} ${emp.middle_name} ${emp.last_name}`.trim();
       refSheet.getCell(`C${rowNum}`).value = emp.employee_status;
 
       //  Color code the status
