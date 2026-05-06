@@ -30,7 +30,8 @@ const MEAL_EXEMPTION_LIMIT = 5000;
 const getMonthEndDate = (month, year) => {
   return new Date(year, monthNames.indexOf(month) + 1, 0);
 };
-// Helper to compare month/year with payroll period
+
+// Helper to compare month/year with payroll period - FIXED for inclusivity
 const isInPayrollPeriod = (
   startMonth,
   startYear,
@@ -42,20 +43,32 @@ const isInPayrollPeriod = (
   const targetMonthIndex = monthNames.indexOf(targetMonth);
   const startMonthIndex = monthNames.indexOf(startMonth);
 
+  // Guard against invalid months
+  if (targetMonthIndex === -1 || startMonthIndex === -1) {
+    console.error(
+      `Invalid month names: target=${targetMonth}, start=${startMonth}`,
+    );
+    return false;
+  }
+
   // Convert to comparable numbers (year * 12 + month index)
   const targetValue = targetYear * 12 + targetMonthIndex;
   const startValue = startYear * 12 + startMonthIndex;
 
-  // Check if target is after or equal to start
+  // Must start on or before target month
   if (targetValue < startValue) return false;
 
-  // If no end date (recurring), it's valid
+  // If no end date (recurring or ongoing), include it
   if (!endMonth || !endYear) return true;
 
+  // Check end date - MUST BE INCLUSIVE
   const endMonthIndex = monthNames.indexOf(endMonth);
+  if (endMonthIndex === -1) return false;
+
   const endValue = endYear * 12 + endMonthIndex;
 
-  // Check if target is before or equal to end
+  // IMPORTANT: Include if target is on or before end date
+  // This matches your getDeductionsByMonth logic
   return targetValue <= endValue;
 };
 
@@ -408,19 +421,19 @@ export const syncPayroll = async (req, res) => {
       if (createError) throw createError;
       payrollRunId = newRunId;
     } else {
-  // For existing runs, fetch the payroll number
-  const { data: existingRunData } = await supabase
-    .from("payroll_runs")
-    .select("payroll_number, payroll_month, payroll_year")
-    .eq("id", payrollRunId)
-    .single();
-  
-  if (existingRunData) {
-    auditPayrollNumber = existingRunData.payroll_number;
-    auditPayrollMonth = existingRunData.payroll_month;
-    auditPayrollYear = existingRunData.payroll_year;
-  }
-}
+      // For existing runs, fetch the payroll number
+      const { data: existingRunData } = await supabase
+        .from("payroll_runs")
+        .select("payroll_number, payroll_month, payroll_year")
+        .eq("id", payrollRunId)
+        .single();
+
+      if (existingRunData) {
+        auditPayrollNumber = existingRunData.payroll_number;
+        auditPayrollMonth = existingRunData.payroll_month;
+        auditPayrollYear = existingRunData.payroll_year;
+      }
+    }
 
     // After creating new payroll run, add:
     await createAuditLog({
@@ -485,55 +498,107 @@ export const syncPayroll = async (req, res) => {
 
     if (employeesError) throw new Error("Failed to fetch employees.");
 
-    // 5. Fetch allowances and deductions with their types
-    const [allowancesResult, deductionsResult, absentDaysResult] =
-      await Promise.all([
-        supabase
-          .from("allowances")
-          .select(
-            `
-          *,
-          allowance_types!inner (
-            code,
-            name,
-            is_cash,
-            is_taxable,
-            has_maximum_value,
-            maximum_value
-          )
-        `,
-          )
-          .eq("company_id", companyId)
-          .or(`is_recurring.eq.true,is_recurring.eq.false`),
+    // 5. Fetch allowances and deductions with their types - WITH PAGINATION
+    console.log("=== FETCHING ALL ALLOWANCES WITH PAGINATION ===");
+    let allAllowancesRaw = [];
+    let allowancesPage = 0;
+    const pageSize = 1000;
+    let hasMoreAllowances = true;
 
-        supabase
-          .from("deductions")
-          .select(
-            `
-          *,
-          deduction_types!inner (
-            code,
-            name,
-            is_pre_tax,
-            has_maximum_value,
-            maximum_value
-          )
-        `,
-          )
-          .eq("company_id", companyId)
-          .or(`is_recurring.eq.true,is_recurring.eq.false`),
+    while (hasMoreAllowances) {
+      const { data, error } = await supabase
+        .from("allowances")
+        .select(
+          `
+      *,
+      allowance_types!inner (
+        code,
+        name,
+        is_cash,
+        is_taxable,
+        has_maximum_value,
+        maximum_value
+      )
+    `,
+        )
+        .eq("company_id", companyId)
+        .or(`is_recurring.eq.true,is_recurring.eq.false`)
+        .range(allowancesPage * pageSize, (allowancesPage + 1) * pageSize - 1);
 
-        supabase
-          .from("employee_absent_days")
-          .select("*")
-          .eq("company_id", companyId)
-          .eq("month", monthNames.indexOf(payrollMonth) + 1)
-          .eq("year", payrollYear),
-      ]);
+      if (error)
+        throw new Error(`Failed to fetch allowances: ${error.message}`);
 
-    if (allowancesResult.error) throw new Error("Failed to fetch allowances.");
-    if (deductionsResult.error) throw new Error("Failed to fetch deductions.");
-    if (absentDaysResult.error) throw new Error("Failed to fetch absent days.");
+      if (data && data.length > 0) {
+        allAllowancesRaw = [...allAllowancesRaw, ...data];
+        allowancesPage++;
+
+        if (data.length < pageSize) {
+          hasMoreAllowances = false;
+        }
+      } else {
+        hasMoreAllowances = false;
+      }
+    }
+    console.log(`Total allowances fetched: ${allAllowancesRaw.length}`);
+
+    console.log("=== FETCHING ALL DEDUCTIONS WITH PAGINATION ===");
+    let allDeductionsRaw = [];
+    let deductionsPage = 0;
+    let hasMoreDeductions = true;
+
+    while (hasMoreDeductions) {
+      const { data, error } = await supabase
+        .from("deductions")
+        .select(
+          `
+      *,
+      deduction_types!inner (
+        code,
+        name,
+        is_pre_tax,
+        has_maximum_value,
+        maximum_value
+      )
+    `,
+        )
+        .eq("company_id", companyId)
+        .range(deductionsPage * pageSize, (deductionsPage + 1) * pageSize - 1);
+
+      if (error)
+        throw new Error(`Failed to fetch deductions: ${error.message}`);
+
+      if (data && data.length > 0) {
+        allDeductionsRaw = [...allDeductionsRaw, ...data];
+        deductionsPage++;
+
+        if (data.length < pageSize) {
+          hasMoreDeductions = false;
+        }
+      } else {
+        hasMoreDeductions = false;
+      }
+    }
+    console.log(`Total deductions fetched: ${allDeductionsRaw.length}`);
+    console.log(`Expected deductions: ~1153, Actual: ${allDeductionsRaw.length}`);
+
+    // Fetch absent days (usually small, no pagination needed)
+    const { data: absentDaysData, error: absentDaysError } = await supabase
+      .from("employee_absent_days")
+      .select("*")
+      .eq("company_id", companyId)
+      .eq("month", monthNames.indexOf(payrollMonth) + 1)
+      .eq("year", payrollYear);
+
+    if (absentDaysError) throw new Error("Failed to fetch absent days.");
+
+    // Create result objects to maintain compatibility
+    const allowancesResult = { data: allAllowancesRaw, error: null };
+    const deductionsResult = { data: allDeductionsRaw, error: null };
+    const absentDaysResult = { data: absentDaysData || [], error: null };
+
+    // Log all deductions before filtering
+    console.log("=== ALL DEDUCTIONS BEFORE FILTER ===");
+    console.log("Total deductions from DB:", deductionsResult.data.length);
 
     // Filter allowances and deductions
     const allAllowances = allowancesResult.data.filter((allowance) =>
@@ -556,6 +621,25 @@ export const syncPayroll = async (req, res) => {
         payrollMonth,
         payrollYear,
       ),
+    );
+
+    // Right after fetching allDeductions
+    console.log("=== DEBUGGING DEDUCTION FILTER ===");
+    console.log("Total deductions after filter:", allDeductions.length);
+
+    // Check month name matching
+    console.log("Month name check:");
+    console.log(
+      "Payroll month:",
+      payrollMonth,
+      "index:",
+      monthNames.indexOf(payrollMonth),
+    );
+    console.log(
+      "Sample deduction start_month:",
+      allDeductions[0]?.start_month,
+      "index:",
+      monthNames.indexOf(allDeductions[0]?.start_month),
     );
 
     const absentDaysRecords = absentDaysResult.data || [];
