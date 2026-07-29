@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: wagewise-backend
+    env: node
+
+    buildCommand: pnpm install
+
+    startCommand: pnpm start
+
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+
+      - key: PNPM_VERSION
+        value: 11
