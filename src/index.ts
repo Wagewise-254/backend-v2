@@ -1,12 +1,16 @@
-import http from 'node:http';
-
-import app from './app.js';
-import { logger } from './config/logger.js';
+import { app } from "./app/app.js";
 
 const PORT = Number(process.env.PORT) || 3000;
 
-const server = http.createServer(app);
+try {
+    await app.listen({
+        host: "0.0.0.0",
+        port: PORT,
+    });
 
-server.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-});
+    app.log.info(`Server running on port ${PORT}`);
+} catch (error) {
+    app.log.error(error);
+
+    process.exit(1);
+}

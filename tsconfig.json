@@ -3,13 +3,23 @@
     "target": "ES2023",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "rootDir": "src",
-    "outDir": "dist",
+
+    "rootDir": "./src",
+    "outDir": "./dist",
+
     "strict": true,
-    "skipLibCheck": true,
+
+    "types": ["node"],
+
     "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "types": ["node"]
+
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true
   },
   "include": ["src"]
 }
