@@ -22,7 +22,8 @@ import allowanceTypeRoutes from './routes/allowanceTypeRoutes.js';
 import absentDaysRoutes from './routes/absentDaysRoutes.js';
 import companyReviewersRoutes from './routes/companyReviewersRoutes.js';
 import payrollEligibilityRoutes from './routes/payrollEligibilityRoutes.js';
-import payrollRoutes from './routes/payrollRoutes.js';
+import payrollRoutes from './routes/payroll/index.js';
+//import payrollRoutes from './routes/payrollRoutes.js';
 import reportsRoutes from './routes/reportsRoutes.js';
 import payslipRoutes from './routes/payslipRoutes.js';
 import p9aRoutes from './routes/p9aRoutes.js';
@@ -75,7 +76,7 @@ app.use('/api', notificationRoutes);
 
 app.use('/api/company/:companyId/payroll/runs', reportsRoutes);
 app.use('/api/company/:companyId', payrollRoutes);
-app.use('/api/company/:companyId', payrollEligibilityRoutes);
+//app.use('/api/company/:companyId', payrollEligibilityRoutes);
 app.use('/api/company/:companyId/payroll/payslip', payslipRoutes);
 app.use('/api/company/:companyId/employees', p9aRoutes);
 app.use('/api/company', helbRoutes);
