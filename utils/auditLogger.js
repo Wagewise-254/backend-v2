@@ -5,27 +5,36 @@ export const createAuditLog = async ({
   entityId,
   action,
   performedBy,
-  entityName = null, // Optional: store human-readable name
+  entityName = null,
   companyId,
+  newData = null,
 }) => {
   if (!entityId) {
-    console.error('Cannot create audit log: entityId is required', { entityType, action });
+    console.error("Cannot create audit log: entityId is required", {
+      entityType,
+      action,
+    });
     return;
   }
 
-   if (!companyId) {
-    console.error('Cannot create audit log: companyId is required', { entityType, action });
+  if (!companyId) {
+    console.error("Cannot create audit log: companyId is required", {
+      entityType,
+      action,
+      entityId,
+    });
     return;
   }
 
   const { error } = await supabase.from("audit_logs").insert({
     entity_type: entityType,
     entity_id: entityId,
-    entity_name: entityName, // Store name for display
+    entity_name: entityName,
     action,
     performed_by: performedBy,
     company_id: companyId,
-    created_at: new Date().toISOString()
+    new_data: newData,
+    created_at: new Date().toISOString(),
   });
 
   if (error) {

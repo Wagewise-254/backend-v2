@@ -65,7 +65,6 @@ router.post("/payroll/reviews/bulk", bulkUpdateReviewStatus);
 router.post(
     "/payroll/runs/:runId/approve",
     checkPayrollAccess,
-    auditAction("payroll_run", "APPROVE_PAYROLL"),
     approvePayrollRun,
 );
 router.post("/payroll/review-summaries", getReviewSummary);

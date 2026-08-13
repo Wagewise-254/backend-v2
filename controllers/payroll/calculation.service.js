@@ -9,106 +9,134 @@ import {
   isInPayrollPeriod,
   getMonthEndDate,
   monthNames,
-  PAYROLL_STATUS
+  PAYROLL_STATUS,
 } from "./utils/statutory-calculations.js";
 import { createAuditLog } from "../../utils/auditLogger.js";
 
 // Helper to get employee eligibility details
 function getEmployeeEligibilityDetails(employee, payrollMonth, payrollYear) {
   const payrollEndDate = getMonthEndDate(payrollMonth, payrollYear);
-  const payrollStartDate = new Date(payrollYear, monthNames.indexOf(payrollMonth), 1);
+  const payrollStartDate = new Date(
+    payrollYear,
+    monthNames.indexOf(payrollMonth),
+    1,
+  );
   const hireDate = employee.hire_date ? new Date(employee.hire_date) : null;
-  
+
   const reasons = [];
   let isEligible = true;
-  
+
   const details = {
     hire_date: employee.hire_date,
     contract_start_date: null,
     contract_end_date: null,
     status_effective_date: employee.employee_status_effective_date,
     current_status: employee.employee_status,
-    is_eligible: true
+    is_eligible: true,
   };
-  
+
   // Check 1: Employee must be ACTIVE or ON LEAVE
   const validStatuses = ["ACTIVE", "ON LEAVE"];
   if (!validStatuses.includes(employee.employee_status)) {
-    reasons.push(`Employee status is "${employee.employee_status}" (must be ACTIVE or ON LEAVE)`);
+    reasons.push(
+      `Employee status is "${employee.employee_status}" (must be ACTIVE or ON LEAVE)`,
+    );
     isEligible = false;
   }
-  
+
   // Check 2: Status effective date validation
-  if (employee.employee_status_effective_date && 
-      ["TERMINATED", "SUSPENDED", "RETIRED"].includes(employee.employee_status)) {
-    const statusEffectiveDate = new Date(employee.employee_status_effective_date);
+  if (
+    employee.employee_status_effective_date &&
+    ["TERMINATED", "SUSPENDED", "RETIRED"].includes(employee.employee_status)
+  ) {
+    const statusEffectiveDate = new Date(
+      employee.employee_status_effective_date,
+    );
     if (statusEffectiveDate <= payrollEndDate) {
-      reasons.push(`Employee was ${employee.employee_status} on ${statusEffectiveDate.toLocaleDateString()} which is during the payroll period`);
+      reasons.push(
+        `Employee was ${employee.employee_status} on ${statusEffectiveDate.toLocaleDateString()} which is during the payroll period`,
+      );
       isEligible = false;
     }
   }
-  
+
   // Check 3: Hire date validation
   if (!hireDate) {
     reasons.push(`No hire date set`);
     isEligible = false;
   } else if (hireDate > payrollEndDate) {
-    reasons.push(`Hired on ${hireDate.toLocaleDateString()} which is after the payroll period`);
+    reasons.push(
+      `Hired on ${hireDate.toLocaleDateString()} which is after the payroll period`,
+    );
     isEligible = false;
   }
-  
+
   // Check 4: Contract validation
   let activeContract = null;
-  
-  if (employee.employee_contracts && Array.isArray(employee.employee_contracts)) {
+
+  if (
+    employee.employee_contracts &&
+    Array.isArray(employee.employee_contracts)
+  ) {
     activeContract = employee.employee_contracts.find(
-      contract => contract.contract_status === 'ACTIVE'
+      (contract) => contract.contract_status === "ACTIVE",
     );
   }
-  
+
   if (!activeContract) {
     reasons.push(`No active contract found`);
     isEligible = false;
   } else {
     details.contract_start_date = activeContract.start_date;
     details.contract_end_date = activeContract.end_date;
-    
+
     const contractStartDate = new Date(activeContract.start_date);
-    const contractEndDate = activeContract.end_date ? new Date(activeContract.end_date) : null;
-    
+    const contractEndDate = activeContract.end_date
+      ? new Date(activeContract.end_date)
+      : null;
+
     if (contractStartDate > payrollEndDate) {
       reasons.push(`Contract starts after payroll period`);
       isEligible = false;
     }
-    
+
     if (contractEndDate && contractEndDate < payrollStartDate) {
       reasons.push(`Contract ended before payroll period started`);
       isEligible = false;
     }
   }
-  
+
   // Check 5: Salary validation
   if (!employee.salary || employee.salary <= 0) {
     reasons.push(`No salary configured`);
     isEligible = false;
   }
-  
+
   // Special case: ON LEAVE status - eligible but will have absent days
   if (employee.employee_status === "ON LEAVE" && isEligible) {
-    reasons.push(`Employee is on leave - will be included but absent days will be deducted`);
+    reasons.push(
+      `Employee is on leave - will be included but absent days will be deducted`,
+    );
   }
-  
+
   details.is_eligible = isEligible;
-  
+
   return {
     is_eligible: isEligible,
     reason: reasons.length > 0 ? reasons.join("; ") : "Eligible for payroll",
-    details
+    details,
   };
 }
 
 // Calculate payroll for a single employee
-function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowances, deductions, absentDaysMap) {
+function calculateEmployeePayroll(
+  employee,
+  payrollMonth,
+  payrollYear,
+  allowances,
+  deductions,
+  absentDaysMap,
+) {
   const employeeType = employee.employee_type || "Primary Employee";
   const isSecondary = employeeType === "Secondary Employee";
   const isDisabled = employee.has_disability || false;
@@ -117,7 +145,7 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
   let basicSalary = parseFloat(employee.salary) || 0;
   let absentDaysCount = 0;
   let absentDaysDeduction = 0;
-  
+
   const absentRecord = absentDaysMap.get(employee.id);
   if (absentRecord) {
     absentDaysCount = absentRecord.days;
@@ -130,10 +158,11 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
   let nonCashTaxableBenefits = 0;
   const allowancesDetails = [];
 
-  const employeeAllowances = allowances.filter(a =>
-    a.employee_id === employee.id ||
-    (a.employee_id === null && a.department_id === employee.department_id) ||
-    a.applies_to === "COMPANY"
+  const employeeAllowances = allowances.filter(
+    (a) =>
+      a.employee_id === employee.id ||
+      (a.employee_id === null && a.department_id === employee.department_id) ||
+      a.applies_to === "COMPANY",
   );
 
   for (const allowance of employeeAllowances) {
@@ -146,7 +175,10 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
     }
 
     if (allowance.allowance_types.has_maximum_value) {
-      allowanceValue = Math.min(allowanceValue, allowance.allowance_types.maximum_value);
+      allowanceValue = Math.min(
+        allowanceValue,
+        allowance.allowance_types.maximum_value,
+      );
     }
 
     const allowanceCode = allowance.allowance_types.code;
@@ -179,13 +211,18 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
 
   // Statutory calculations
   const nssfResult = employee.pays_nssf
-    ? calculateNSSF(grossPayForStatutory, payrollMonth, payrollYear, employeeType)
+    ? calculateNSSF(
+        grossPayForStatutory,
+        payrollMonth,
+        payrollYear,
+        employeeType,
+      )
     : { tier1: 0, tier2: 0, total: 0 };
 
   const shifDeduction = employee.pays_shif
     ? calculateSHIF(grossPayForStatutory, payrollYear, payrollMonth)
     : 0;
-  
+
   const housingLevyDeduction = employee.pays_housing_levy
     ? calculateHousingLevy(grossPayForStatutory, payrollYear, payrollMonth)
     : 0;
@@ -200,10 +237,11 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
   let pensionDeduction = 0;
   let hasPensionDeduction = false;
 
-  const employeeDeductions = deductions.filter(d =>
-    d.employee_id === employee.id ||
-    (d.employee_id === null && d.department_id === employee.department_id) ||
-    d.applies_to === "COMPANY"
+  const employeeDeductions = deductions.filter(
+    (d) =>
+      d.employee_id === employee.id ||
+      (d.employee_id === null && d.department_id === employee.department_id) ||
+      d.applies_to === "COMPANY",
   );
 
   let helbDeduction = getHelbDeduction(employee);
@@ -215,11 +253,15 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
     if (deduction.calculation_type === "FIXED") {
       deductionValue = parseFloat(deduction.value);
     } else if (deduction.calculation_type === "PERCENTAGE") {
-      deductionValue = grossPayForStatutory * (parseFloat(deduction.value) / 100);
+      deductionValue =
+        grossPayForStatutory * (parseFloat(deduction.value) / 100);
     }
 
     if (deduction.deduction_types.has_maximum_value) {
-      deductionValue = Math.min(deductionValue, deduction.deduction_types.maximum_value);
+      deductionValue = Math.min(
+        deductionValue,
+        deduction.deduction_types.maximum_value,
+      );
     }
 
     const deductionCode = deduction.deduction_types.code;
@@ -228,7 +270,10 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
     if (deductionCode === "PENSION") {
       pensionDeduction = deductionValue;
       hasPensionDeduction = true;
-    } else if (deductionCode === "INS" || deduction.deduction_types.name.toLowerCase().includes("insurance")) {
+    } else if (
+      deductionCode === "INS" ||
+      deduction.deduction_types.name.toLowerCase().includes("insurance")
+    ) {
       insurancePremium += deductionValue;
     }
 
@@ -253,7 +298,12 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
   if (isSecondary) {
     taxableIncome = totalGrossPay - preTaxDeductions;
   } else {
-    taxableIncome = totalGrossPay - nssfResult.total - shifDeduction - housingLevyDeduction - preTaxDeductions;
+    taxableIncome =
+      totalGrossPay -
+      nssfResult.total -
+      shifDeduction -
+      housingLevyDeduction -
+      preTaxDeductions;
   }
 
   // Calculate PAYE
@@ -269,7 +319,8 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
   }
 
   // Calculate totals
-  let totalStatutoryDeductions = nssfResult.total + shifDeduction + housingLevyDeduction + payeTax;
+  let totalStatutoryDeductions =
+    nssfResult.total + shifDeduction + housingLevyDeduction + payeTax;
   let totalDeductions = totalStatutoryDeductions + postTaxDeductions;
   if (hasPensionDeduction) {
     totalDeductions += pensionDeduction;
@@ -311,13 +362,85 @@ function calculateEmployeePayroll(employee, payrollMonth, payrollYear, allowance
     absent_days: absentDaysCount,
     absent_days_deduction: absentDaysDeduction,
     employee_number: employee.employee_number,
-    employee_name: `${employee.first_name || ''} ${employee.last_name || ''}`.trim(),
+    employee_name:
+      `${employee.first_name || ""} ${employee.last_name || ""}`.trim(),
     job_title: employee.job_title,
     department_name: employee.department?.name || null,
     is_eligible: true, // Will be updated based on eligibility check
     ineligibility_reason: null,
     is_override: false,
   };
+}
+
+// clean up  review duplicates
+async function cleanupDuplicateReviews(payrollRunId) {
+  // First get all payroll_detail_ids for this run
+  const { data: details, error: detailsError } = await supabase
+    .from("payroll_details")
+    .select("id")
+    .eq("payroll_run_id", payrollRunId);
+
+  if (detailsError || !details || details.length === 0) return;
+
+  const detailIds = details.map((d) => d.id);
+
+  // Get all reviews for these payroll details
+  const { data: reviews, error: reviewsError } = await supabase
+    .from("payroll_reviews")
+    .select(
+      `
+      id,
+      payroll_detail_id,
+      company_reviewer_id,
+      status,
+      reviewed_at
+    `,
+    )
+    .in("payroll_detail_id", detailIds);
+
+  if (reviewsError || !reviews) return;
+
+  // Group by payroll_detail_id and company_reviewer_id
+  const seen = new Map();
+  const duplicates = [];
+
+  reviews.forEach((review) => {
+    const key = `${review.payroll_detail_id}-${review.company_reviewer_id}`;
+    if (seen.has(key)) {
+      // Keep the one with a status (APPROVED/REJECTED) over PENDING, or keep the latest
+      const existing = seen.get(key);
+      const existingPriority = existing.status === "PENDING" ? 0 : 1;
+      const currentPriority = review.status === "PENDING" ? 0 : 1;
+
+      if (
+        currentPriority > existingPriority ||
+        (currentPriority === existingPriority &&
+          new Date(review.reviewed_at || 0) >
+            new Date(existing.reviewed_at || 0))
+      ) {
+        duplicates.push(existing.id);
+        seen.set(key, review);
+      } else {
+        duplicates.push(review.id);
+      }
+    } else {
+      seen.set(key, review);
+    }
+  });
+
+  // Delete duplicates
+  if (duplicates.length > 0) {
+    const { error: deleteError } = await supabase
+      .from("payroll_reviews")
+      .delete()
+      .in("id", duplicates);
+
+    if (deleteError) {
+      console.error("Error deleting duplicate reviews:", deleteError);
+    } else {
+      console.log(`Deleted ${duplicates.length} duplicate reviews`);
+    }
+  }
 }
 
 // Main calculation function with progress tracking - FIXED
@@ -340,17 +463,29 @@ export const calculatePayroll = async (req, res) => {
     // Step 1: Create or get payroll run
     let payrollRun;
     try {
-      payrollRun = await getOrCreatePayrollRun(companyId, payrollMonth, payrollYear, userId);
+      payrollRun = await getOrCreatePayrollRun(
+        companyId,
+        payrollMonth,
+        payrollYear,
+        userId,
+      );
     } catch (createError) {
       // If we get a duplicate key error, try one more time with a different number
-      if (createError.code === '23505') {
-        console.log("Duplicate key error, retrying with different payroll number...");
-        payrollRun = await getOrCreatePayrollRun(companyId, payrollMonth, payrollYear, userId);
+      if (createError.code === "23505") {
+        console.log(
+          "Duplicate key error, retrying with different payroll number...",
+        );
+        payrollRun = await getOrCreatePayrollRun(
+          companyId,
+          payrollMonth,
+          payrollYear,
+          userId,
+        );
       } else {
         throw createError;
       }
     }
-    
+
     // Step 2: Check if payroll already has details
     const { count: existingDetailsCount, error: countError } = await supabase
       .from("payroll_details")
@@ -368,27 +503,28 @@ export const calculatePayroll = async (req, res) => {
         error: "Payroll already has calculated details",
         message: "Use recalculate endpoint to update existing payroll",
         payrollRunId: payrollRun.id,
-        status: payrollRun.status
+        status: payrollRun.status,
       });
     }
 
     // Step 3: Stream the calculation progress
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
 
     const sendProgress = (step, message, data = null) => {
       res.write(`data: ${JSON.stringify({ step, message, data })}\n\n`);
     };
 
-    sendProgress('STARTED', 'Starting payroll calculation...');
+    sendProgress("STARTED", "Starting payroll calculation...");
 
     // Step 4: Fetch all employees with relations
-    sendProgress('FETCHING_EMPLOYEES', 'Fetching employees...');
-    
+    sendProgress("FETCHING_EMPLOYEES", "Fetching employees...");
+
     const { data: employees, error: employeesError } = await supabase
       .from("employees")
-      .select(`
+      .select(
+        `
         *,
         employee_contracts (
           id,
@@ -419,7 +555,8 @@ export const calculatePayroll = async (req, res) => {
           id,
           name
         )
-      `)
+      `,
+      )
       .eq("company_id", companyId)
       .is("deleted_at", null);
 
@@ -427,28 +564,35 @@ export const calculatePayroll = async (req, res) => {
       console.error("Error fetching employees:", employeesError);
       throw new Error(`Failed to fetch employees: ${employeesError.message}`);
     }
-    
+
     // Filter to only ACTIVE employees with active contracts
-    const activeEmployees = employees.filter(emp => {
+    const activeEmployees = employees.filter((emp) => {
       // Check if employee is active or on leave
-      const isActiveStatus = ["ACTIVE", "ON LEAVE"].includes(emp.employee_status);
-      
+      const isActiveStatus = ["ACTIVE", "ON LEAVE"].includes(
+        emp.employee_status,
+      );
+
       // Check if employee has an active contract
       const hasActiveContract = emp.employee_contracts?.some(
-        contract => contract.contract_status === 'ACTIVE'
+        (contract) => contract.contract_status === "ACTIVE",
       );
-      
+
       return isActiveStatus && hasActiveContract;
     });
 
-    sendProgress('EMPLOYEES_FETCHED', `Found ${activeEmployees.length} active employees`, { total: activeEmployees.length });
+    sendProgress(
+      "EMPLOYEES_FETCHED",
+      `Found ${activeEmployees.length} active employees`,
+      { total: activeEmployees.length },
+    );
 
     // Step 5: Fetch allowances and deductions
-    sendProgress('FETCHING_ALLOWANCES', 'Fetching allowances...');
-    
+    sendProgress("FETCHING_ALLOWANCES", "Fetching allowances...");
+
     const { data: allowancesRaw, error: allowancesError } = await supabase
       .from("allowances")
-      .select(`
+      .select(
+        `
         *,
         allowance_types!inner (
           code,
@@ -458,7 +602,8 @@ export const calculatePayroll = async (req, res) => {
           has_maximum_value,
           maximum_value
         )
-      `)
+      `,
+      )
       .eq("company_id", companyId)
       .or(`is_recurring.eq.true,is_recurring.eq.false`);
 
@@ -467,11 +612,12 @@ export const calculatePayroll = async (req, res) => {
       throw new Error(`Failed to fetch allowances: ${allowancesError.message}`);
     }
 
-    sendProgress('FETCHING_DEDUCTIONS', 'Fetching deductions...');
+    sendProgress("FETCHING_DEDUCTIONS", "Fetching deductions...");
 
     const { data: deductionsRaw, error: deductionsError } = await supabase
       .from("deductions")
-      .select(`
+      .select(
+        `
         *,
         deduction_types!inner (
           code,
@@ -480,7 +626,8 @@ export const calculatePayroll = async (req, res) => {
           has_maximum_value,
           maximum_value
         )
-      `)
+      `,
+      )
       .eq("company_id", companyId);
 
     if (deductionsError) {
@@ -489,34 +636,40 @@ export const calculatePayroll = async (req, res) => {
     }
 
     // Step 6: Filter allowances and deductions by period
-    sendProgress('FILTERING_PERIOD', 'Filtering allowances and deductions for the period...');
+    sendProgress(
+      "FILTERING_PERIOD",
+      "Filtering allowances and deductions for the period...",
+    );
 
-    const allowances = allowancesRaw.filter(a =>
+    const allowances = allowancesRaw.filter((a) =>
       isInPayrollPeriod(
         a.start_month,
         a.start_year,
         a.end_month,
         a.end_year,
         payrollMonth,
-        parseInt(payrollYear)
-      )
+        parseInt(payrollYear),
+      ),
     );
 
-    const deductions = deductionsRaw.filter(d =>
+    const deductions = deductionsRaw.filter((d) =>
       isInPayrollPeriod(
         d.start_month,
         d.start_year,
         d.end_month,
         d.end_year,
         payrollMonth,
-        parseInt(payrollYear)
-      )
+        parseInt(payrollYear),
+      ),
     );
 
-    sendProgress('PERIOD_FILTERED', `Found ${allowances.length} allowances and ${deductions.length} deductions`);
+    sendProgress(
+      "PERIOD_FILTERED",
+      `Found ${allowances.length} allowances and ${deductions.length} deductions`,
+    );
 
     // Step 7: Fetch absent days
-    sendProgress('FETCHING_ABSENT_DAYS', 'Fetching absent days...');
+    sendProgress("FETCHING_ABSENT_DAYS", "Fetching absent days...");
 
     const { data: absentDaysData, error: absentDaysError } = await supabase
       .from("employee_absent_days")
@@ -527,11 +680,13 @@ export const calculatePayroll = async (req, res) => {
 
     if (absentDaysError) {
       console.error("Error fetching absent days:", absentDaysError);
-      throw new Error(`Failed to fetch absent days: ${absentDaysError.message}`);
+      throw new Error(
+        `Failed to fetch absent days: ${absentDaysError.message}`,
+      );
     }
 
     const absentDaysMap = new Map();
-    absentDaysData.forEach(record => {
+    absentDaysData.forEach((record) => {
       absentDaysMap.set(record.employee_id, {
         days: record.absent_days,
         amount: record.total_deduction_amount,
@@ -540,7 +695,7 @@ export const calculatePayroll = async (req, res) => {
     });
 
     // Step 8: Calculate payroll for each employee
-    sendProgress('CALCULATING', 'Calculating payroll for employees...');
+    sendProgress("CALCULATING", "Calculating payroll for employees...");
 
     const payrollDetails = [];
     let totals = {
@@ -550,7 +705,7 @@ export const calculatePayroll = async (req, res) => {
       totalNetPay: 0,
       totalEmployees: 0,
       eligibleCount: 0,
-      ineligibleCount: 0
+      ineligibleCount: 0,
     };
 
     let processedCount = 0;
@@ -558,16 +713,24 @@ export const calculatePayroll = async (req, res) => {
 
     for (const employee of activeEmployees) {
       processedCount++;
-      
+
       // Check eligibility
-      const eligibility = getEmployeeEligibilityDetails(employee, payrollMonth, parseInt(payrollYear));
-      
-      sendProgress('PROCESSING_EMPLOYEE', `Processing ${employee.first_name} ${employee.last_name}...`, {
-        current: processedCount,
-        total: totalEmployees,
-        employeeId: employee.id,
-        eligible: eligibility.is_eligible
-      });
+      const eligibility = getEmployeeEligibilityDetails(
+        employee,
+        payrollMonth,
+        parseInt(payrollYear),
+      );
+
+      sendProgress(
+        "PROCESSING_EMPLOYEE",
+        `Processing ${employee.first_name} ${employee.last_name}...`,
+        {
+          current: processedCount,
+          total: totalEmployees,
+          employeeId: employee.id,
+          eligible: eligibility.is_eligible,
+        },
+      );
 
       // Calculate payroll for eligible employees
       let payrollData;
@@ -578,9 +741,9 @@ export const calculatePayroll = async (req, res) => {
           parseInt(payrollYear),
           allowances,
           deductions,
-          absentDaysMap
+          absentDaysMap,
         );
-        
+
         totals.eligibleCount++;
       } else {
         // Create minimal payroll data for ineligible employees
@@ -603,7 +766,8 @@ export const calculatePayroll = async (req, res) => {
           housing_levy_deduction: 0,
           net_pay: 0,
           employee_number: employee.employee_number,
-          employee_name: `${employee.first_name || ''} ${employee.last_name || ''}`.trim(),
+          employee_name:
+            `${employee.first_name || ""} ${employee.last_name || ""}`.trim(),
           job_title: employee.job_title,
           department_name: employee.department?.name || null,
           allowances_details: [],
@@ -612,7 +776,7 @@ export const calculatePayroll = async (req, res) => {
           ineligibility_reason: eligibility.reason,
           is_override: false,
         };
-        
+
         totals.ineligibleCount++;
       }
 
@@ -625,19 +789,20 @@ export const calculatePayroll = async (req, res) => {
       // Update totals
       if (eligibility.is_eligible) {
         totals.totalGrossPay += payrollData.gross_pay || 0;
-        totals.totalStatutoryDeductions += payrollData.total_statutory_deductions || 0;
+        totals.totalStatutoryDeductions +=
+          payrollData.total_statutory_deductions || 0;
         totals.totalPaye += payrollData.paye_tax || 0;
         totals.totalNetPay += payrollData.net_pay || 0;
       }
-      
+
       payrollDetails.push(payrollData);
       totals.totalEmployees++;
     }
 
-    sendProgress('SAVING', 'Saving payroll details...', {
+    sendProgress("SAVING", "Saving payroll details...", {
       totalEmployees: payrollDetails.length,
       eligible: totals.eligibleCount,
-      ineligible: totals.ineligibleCount
+      ineligible: totals.ineligibleCount,
     });
 
     // Step 9: Insert payroll details
@@ -648,12 +813,14 @@ export const calculatePayroll = async (req, res) => {
 
       if (insertError) {
         console.error("Error inserting payroll details:", insertError);
-        throw new Error(`Failed to save payroll details: ${insertError.message}`);
+        throw new Error(
+          `Failed to save payroll details: ${insertError.message}`,
+        );
       }
     }
 
     // Step 10: Update payroll run
-    sendProgress('UPDATING_RUN', 'Updating payroll run...');
+    sendProgress("UPDATING_RUN", "Updating payroll run...");
 
     const { error: updateError } = await supabase
       .from("payroll_runs")
@@ -676,7 +843,7 @@ export const calculatePayroll = async (req, res) => {
     }
 
     // Step 11: Initialize reviews
-    sendProgress('INITIALIZING_REVIEWS', 'Setting up reviews...');
+    sendProgress("INITIALIZING_REVIEWS", "Setting up reviews...");
 
     await initializePayrollReviews(payrollRun.id, companyId);
 
@@ -693,43 +860,43 @@ export const calculatePayroll = async (req, res) => {
         eligible: totals.eligibleCount,
         ineligible: totals.ineligibleCount,
         totalGrossPay: totals.totalGrossPay,
-        totalNetPay: totals.totalNetPay
-      }
+        totalNetPay: totals.totalNetPay,
+      },
     });
 
-    sendProgress('COMPLETED', 'Payroll calculation completed successfully!', {
+    sendProgress("COMPLETED", "Payroll calculation completed successfully!", {
       payrollRunId: payrollRun.id,
-      ...totals
+      ...totals,
     });
 
     res.end();
-
   } catch (error) {
     console.error("Payroll calculation error:", error);
-    
+
     // Send error via SSE
     try {
-      res.write(`data: ${JSON.stringify({ 
-        step: 'ERROR', 
-        message: error.message || 'An unexpected error occurred',
-        error: true 
-      })}\n\n`);
+      res.write(
+        `data: ${JSON.stringify({
+          step: "ERROR",
+          message: error.message || "An unexpected error occurred",
+          error: true,
+        })}\n\n`,
+      );
     } catch (writeError) {
       console.error("Failed to write error to SSE:", writeError);
     }
-    
+
     // If headers aren't sent yet, send JSON error
     if (!res.headersSent) {
-      return res.status(500).json({ 
-        error: "Payroll calculation failed", 
-        details: error.message 
+      return res.status(500).json({
+        error: "Payroll calculation failed",
+        details: error.message,
       });
     }
-    
+
     res.end();
   }
 };
-
 
 // Recalculate payroll (for existing payroll runs)
 export const recalculatePayroll = async (req, res) => {
@@ -750,55 +917,80 @@ export const recalculatePayroll = async (req, res) => {
     }
 
     // Check if can recalculate
-    const blockedStatuses = [PAYROLL_STATUS.APPROVED, PAYROLL_STATUS.LOCKED, PAYROLL_STATUS.PAID];
+    const blockedStatuses = [
+      PAYROLL_STATUS.APPROVED,
+      PAYROLL_STATUS.LOCKED,
+      PAYROLL_STATUS.PAID,
+    ];
     if (blockedStatuses.includes(payrollRun.status)) {
       return res.status(403).json({
         error: `Cannot recalculate payroll with status: ${payrollRun.status}`,
-        message: `Payroll runs that are ${payrollRun.status.toLowerCase()} cannot be modified.`
+        message: `Payroll runs that are ${payrollRun.status.toLowerCase()} cannot be modified.`,
       });
     }
 
     // Set up SSE for progress
-    res.setHeader('Content-Type', 'text/event-stream');
-    res.setHeader('Cache-Control', 'no-cache');
-    res.setHeader('Connection', 'keep-alive');
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
 
     const sendProgress = (step, message, data = null) => {
       res.write(`data: ${JSON.stringify({ step, message, data })}\n\n`);
     };
 
-    sendProgress('STARTED', 'Starting payroll recalculation...');
+    sendProgress("STARTED", "Starting payroll recalculation...");
 
-    // Delete existing payroll details
-    sendProgress('DELETING_OLD', 'Removing existing payroll details...');
+    // Get existing payroll detail IDs first
+sendProgress("FETCHING_OLD", "Preparing existing payroll data...");
 
-    const { error: deleteError } = await supabase
-      .from("payroll_details")
-      .delete()
-      .eq("payroll_run_id", runId);
+const { data: detailsToDelete, error: detailsFetchError } = await supabase
+  .from("payroll_details")
+  .select("id")
+  .eq("payroll_run_id", runId);
 
-    if (deleteError) throw deleteError;
+if (detailsFetchError) {
+  throw detailsFetchError;
+}
 
-    // Delete existing reviews
-    sendProgress('DELETING_REVIEWS', 'Removing existing reviews...');
+// Delete existing reviews FIRST
+sendProgress("DELETING_REVIEWS", "Removing existing reviews...");
 
-    const { error: deleteReviewsError } = await supabase
-      .from("payroll_reviews")
-      .delete()
-      .eq("payroll_run_id", runId);
+if (detailsToDelete && detailsToDelete.length > 0) {
+  const detailIds = detailsToDelete.map((d) => d.id);
 
-    if (deleteReviewsError) throw deleteReviewsError;
+  const { error: deleteReviewsError } = await supabase
+    .from("payroll_reviews")
+    .delete()
+    .in("payroll_detail_id", detailIds);
+
+  if (deleteReviewsError) {
+    throw deleteReviewsError;
+  }
+}
+
+// Now delete payroll details
+sendProgress("DELETING_OLD", "Removing existing payroll details...");
+
+const { error: deleteError } = await supabase
+  .from("payroll_details")
+  .delete()
+  .eq("payroll_run_id", runId);
+
+if (deleteError) {
+  throw deleteError;
+}
 
     // Now run the calculation with the same logic as calculatePayroll
     const payrollMonth = payrollRun.payroll_month;
     const payrollYear = payrollRun.payroll_year;
 
     // Fetch all employees with relations
-    sendProgress('FETCHING_EMPLOYEES', 'Fetching employees...');
-    
+    sendProgress("FETCHING_EMPLOYEES", "Fetching employees...");
+
     const { data: employees, error: employeesError } = await supabase
       .from("employees")
-      .select(`
+      .select(
+        `
         *,
         employee_contracts!inner (
           id,
@@ -829,21 +1021,25 @@ export const recalculatePayroll = async (req, res) => {
           id,
           name
         )
-      `)
+      `,
+      )
       .eq("company_id", companyId)
       .eq("employee_contracts.contract_status", "ACTIVE")
       .is("deleted_at", null);
 
     if (employeesError) throw new Error("Failed to fetch employees.");
-    
-    sendProgress('EMPLOYEES_FETCHED', `Found ${employees.length} employees`, { total: employees.length });
+
+    sendProgress("EMPLOYEES_FETCHED", `Found ${employees.length} employees`, {
+      total: employees.length,
+    });
 
     // Fetch allowances and deductions
-    sendProgress('FETCHING_ALLOWANCES', 'Fetching allowances...');
-    
+    sendProgress("FETCHING_ALLOWANCES", "Fetching allowances...");
+
     const { data: allowancesRaw, error: allowancesError } = await supabase
       .from("allowances")
-      .select(`
+      .select(
+        `
         *,
         allowance_types!inner (
           code,
@@ -853,17 +1049,19 @@ export const recalculatePayroll = async (req, res) => {
           has_maximum_value,
           maximum_value
         )
-      `)
+      `,
+      )
       .eq("company_id", companyId)
       .or(`is_recurring.eq.true,is_recurring.eq.false`);
 
     if (allowancesError) throw new Error("Failed to fetch allowances.");
 
-    sendProgress('FETCHING_DEDUCTIONS', 'Fetching deductions...');
+    sendProgress("FETCHING_DEDUCTIONS", "Fetching deductions...");
 
     const { data: deductionsRaw, error: deductionsError } = await supabase
       .from("deductions")
-      .select(`
+      .select(
+        `
         *,
         deduction_types!inner (
           code,
@@ -872,40 +1070,47 @@ export const recalculatePayroll = async (req, res) => {
           has_maximum_value,
           maximum_value
         )
-      `)
+      `,
+      )
       .eq("company_id", companyId);
 
     if (deductionsError) throw new Error("Failed to fetch deductions.");
 
     // Filter allowances and deductions by period
-    sendProgress('FILTERING_PERIOD', 'Filtering allowances and deductions for the period...');
+    sendProgress(
+      "FILTERING_PERIOD",
+      "Filtering allowances and deductions for the period...",
+    );
 
-    const allowances = allowancesRaw.filter(a =>
+    const allowances = allowancesRaw.filter((a) =>
       isInPayrollPeriod(
         a.start_month,
         a.start_year,
         a.end_month,
         a.end_year,
         payrollMonth,
-        payrollYear
-      )
+        payrollYear,
+      ),
     );
 
-    const deductions = deductionsRaw.filter(d =>
+    const deductions = deductionsRaw.filter((d) =>
       isInPayrollPeriod(
         d.start_month,
         d.start_year,
         d.end_month,
         d.end_year,
         payrollMonth,
-        payrollYear
-      )
+        payrollYear,
+      ),
     );
 
-    sendProgress('PERIOD_FILTERED', `Found ${allowances.length} allowances and ${deductions.length} deductions`);
+    sendProgress(
+      "PERIOD_FILTERED",
+      `Found ${allowances.length} allowances and ${deductions.length} deductions`,
+    );
 
     // Fetch absent days
-    sendProgress('FETCHING_ABSENT_DAYS', 'Fetching absent days...');
+    sendProgress("FETCHING_ABSENT_DAYS", "Fetching absent days...");
 
     const { data: absentDaysData, error: absentDaysError } = await supabase
       .from("employee_absent_days")
@@ -917,7 +1122,7 @@ export const recalculatePayroll = async (req, res) => {
     if (absentDaysError) throw new Error("Failed to fetch absent days.");
 
     const absentDaysMap = new Map();
-    absentDaysData.forEach(record => {
+    absentDaysData.forEach((record) => {
       absentDaysMap.set(record.employee_id, {
         days: record.absent_days,
         amount: record.total_deduction_amount,
@@ -926,7 +1131,7 @@ export const recalculatePayroll = async (req, res) => {
     });
 
     // Calculate payroll for each employee
-    sendProgress('CALCULATING', 'Calculating payroll for employees...');
+    sendProgress("CALCULATING", "Calculating payroll for employees...");
 
     const payrollDetails = [];
     let totals = {
@@ -936,7 +1141,7 @@ export const recalculatePayroll = async (req, res) => {
       totalNetPay: 0,
       totalEmployees: 0,
       eligibleCount: 0,
-      ineligibleCount: 0
+      ineligibleCount: 0,
     };
 
     let processedCount = 0;
@@ -944,16 +1149,24 @@ export const recalculatePayroll = async (req, res) => {
 
     for (const employee of employees) {
       processedCount++;
-      
+
       // Check eligibility
-      const eligibility = getEmployeeEligibilityDetails(employee, payrollMonth, parseInt(payrollYear));
-      
-      sendProgress('PROCESSING_EMPLOYEE', `Processing ${employee.first_name} ${employee.last_name}...`, {
-        current: processedCount,
-        total: totalEmployees,
-        employeeId: employee.id,
-        eligible: eligibility.is_eligible
-      });
+      const eligibility = getEmployeeEligibilityDetails(
+        employee,
+        payrollMonth,
+        parseInt(payrollYear),
+      );
+
+      sendProgress(
+        "PROCESSING_EMPLOYEE",
+        `Processing ${employee.first_name} ${employee.last_name}...`,
+        {
+          current: processedCount,
+          total: totalEmployees,
+          employeeId: employee.id,
+          eligible: eligibility.is_eligible,
+        },
+      );
 
       // Calculate payroll for eligible employees
       let payrollData;
@@ -964,9 +1177,9 @@ export const recalculatePayroll = async (req, res) => {
           parseInt(payrollYear),
           allowances,
           deductions,
-          absentDaysMap
+          absentDaysMap,
         );
-        
+
         totals.eligibleCount++;
       } else {
         // Create minimal payroll data for ineligible employees
@@ -989,7 +1202,8 @@ export const recalculatePayroll = async (req, res) => {
           housing_levy_deduction: 0,
           net_pay: 0,
           employee_number: employee.employee_number,
-          employee_name: `${employee.first_name || ''} ${employee.last_name || ''}`.trim(),
+          employee_name:
+            `${employee.first_name || ""} ${employee.last_name || ""}`.trim(),
           job_title: employee.job_title,
           department_name: employee.department?.name || null,
           allowances_details: [],
@@ -998,7 +1212,7 @@ export const recalculatePayroll = async (req, res) => {
           ineligibility_reason: eligibility.reason,
           is_override: false,
         };
-        
+
         totals.ineligibleCount++;
       }
 
@@ -1011,19 +1225,20 @@ export const recalculatePayroll = async (req, res) => {
       // Update totals
       if (eligibility.is_eligible) {
         totals.totalGrossPay += payrollData.gross_pay || 0;
-        totals.totalStatutoryDeductions += payrollData.total_statutory_deductions || 0;
+        totals.totalStatutoryDeductions +=
+          payrollData.total_statutory_deductions || 0;
         totals.totalPaye += payrollData.paye_tax || 0;
         totals.totalNetPay += payrollData.net_pay || 0;
       }
-      
+
       payrollDetails.push(payrollData);
       totals.totalEmployees++;
     }
 
-    sendProgress('SAVING', 'Saving payroll details...', {
+    sendProgress("SAVING", "Saving payroll details...", {
       totalEmployees: payrollDetails.length,
       eligible: totals.eligibleCount,
-      ineligible: totals.ineligibleCount
+      ineligible: totals.ineligibleCount,
     });
 
     // Insert payroll details
@@ -1034,7 +1249,7 @@ export const recalculatePayroll = async (req, res) => {
     if (insertError) throw insertError;
 
     // Update payroll run
-    sendProgress('UPDATING_RUN', 'Updating payroll run...');
+    sendProgress("UPDATING_RUN", "Updating payroll run...");
 
     const { error: updateError } = await supabase
       .from("payroll_runs")
@@ -1054,7 +1269,7 @@ export const recalculatePayroll = async (req, res) => {
     if (updateError) throw updateError;
 
     // Initialize reviews
-    sendProgress('INITIALIZING_REVIEWS', 'Setting up reviews...');
+    sendProgress("INITIALIZING_REVIEWS", "Setting up reviews...");
 
     await initializePayrollReviews(runId, companyId);
 
@@ -1071,30 +1286,36 @@ export const recalculatePayroll = async (req, res) => {
         eligible: totals.eligibleCount,
         ineligible: totals.ineligibleCount,
         totalGrossPay: totals.totalGrossPay,
-        totalNetPay: totals.totalNetPay
-      }
+        totalNetPay: totals.totalNetPay,
+      },
     });
 
-    sendProgress('COMPLETED', 'Payroll recalculation completed successfully!', {
+    sendProgress("COMPLETED", "Payroll recalculation completed successfully!", {
       payrollRunId: runId,
-      ...totals
+      ...totals,
     });
 
     res.end();
-
   } catch (error) {
     console.error("Payroll recalculation error:", error);
-    res.write(`data: ${JSON.stringify({ 
-      step: 'ERROR', 
-      message: error.message,
-      error: true 
-    })}\n\n`);
+    res.write(
+      `data: ${JSON.stringify({
+        step: "ERROR",
+        message: error.message,
+        error: true,
+      })}\n\n`,
+    );
     res.end();
   }
 };
 
 // Helper: Get or create payroll run - FIXED VERSION
-async function getOrCreatePayrollRun(companyId, payrollMonth, payrollYear, userId) {
+async function getOrCreatePayrollRun(
+  companyId,
+  payrollMonth,
+  payrollYear,
+  userId,
+) {
   // Check if payroll run exists
   const { data: existingRun } = await supabase
     .from("payroll_runs")
@@ -1109,8 +1330,11 @@ async function getOrCreatePayrollRun(companyId, payrollMonth, payrollYear, userI
   }
 
   // Create new payroll run with proper unique payroll_number
-  const monthNum = String(monthNames.indexOf(payrollMonth) + 1).padStart(2, "0");
-  
+  const monthNum = String(monthNames.indexOf(payrollMonth) + 1).padStart(
+    2,
+    "0",
+  );
+
   // Get the count of existing runs for this company and period to generate unique number
   const { count, error: countError } = await supabase
     .from("payroll_runs")
@@ -1130,7 +1354,7 @@ async function getOrCreatePayrollRun(companyId, payrollMonth, payrollYear, userI
   const payrollNumber = `PR-${payrollYear}${monthNum}-${sequence}-${timestamp}`;
 
   const newRunId = uuidv4();
-  
+
   // First, check if a run with this number already exists (race condition safety)
   const { data: existingWithNumber } = await supabase
     .from("payroll_runs")
@@ -1178,8 +1402,7 @@ async function getOrCreatePayrollRun(companyId, payrollMonth, payrollYear, userI
   return newRun;
 }
 
-
-// Helper: Initialize payroll reviews
+// initialize Payroll Reviews
 async function initializePayrollReviews(payrollRunId, companyId) {
   try {
     // Get all active reviewers
@@ -1195,37 +1418,75 @@ async function initializePayrollReviews(payrollRunId, companyId) {
       return;
     }
 
-    // Get all payroll details
+    // Get all eligible payroll employees for this run
     const { data: details, error: detError } = await supabase
       .from("payroll_details")
-      .select("id")
-      .eq("payroll_run_id", payrollRunId);
+      .select("id, employee_id, employee_name, is_eligible")
+      .eq("payroll_run_id", payrollRunId)
+      .eq("is_eligible", true);
 
     if (detError) throw detError;
-    if (!details || details.length === 0) return;
+     if (!details || details.length === 0) {
+      console.log(
+        `No eligible payroll details found for run ${payrollRunId}.`,
+      );
+      return;
+    }
 
-    // Prepare review entries
+    // Build the review entries
     const reviewEntries = [];
-    details.forEach((detail) => {
-      reviewers.forEach((reviewer) => {
+
+     for (const detail of details) {
+      for (const reviewer of reviewers) {
         reviewEntries.push({
           payroll_detail_id: detail.id,
           company_reviewer_id: reviewer.id,
           status: "PENDING",
         });
-      });
-    });
-
-    // Batch insert
-    if (reviewEntries.length > 0) {
-      const { error: insertError } = await supabase
-        .from("payroll_reviews")
-        .insert(reviewEntries);
-
-      if (insertError) throw insertError;
+      }
     }
 
-    console.log(`Initialized ${reviewEntries.length} reviews for payroll run ${payrollRunId}`);
+    if (reviewEntries.length === 0) return;
+
+    // Use the bulk insert function to handle duplicates
+    const { data: result, error: bulkError } = await supabase.rpc(
+      "bulk_insert_payroll_reviews_safe",
+      {
+        p_reviews: reviewEntries,
+      },
+    );
+
+    if (bulkError) {
+      console.error("Error in bulk insert:", bulkError);
+      // Fallback: try inserting one by one
+      let insertedCount = 0;
+      let skippedCount = 0;
+
+      for (const entry of reviewEntries) {
+        const { error: singleError } = await supabase.rpc(
+          "insert_payroll_review_safe",
+          {
+            p_payroll_detail_id: entry.payroll_detail_id,
+            p_company_reviewer_id: entry.company_reviewer_id,
+            p_status: entry.status,
+          },
+        );
+
+        if (singleError) {
+          console.error("Error inserting single review:", singleError);
+        } else {
+          insertedCount++;
+        }
+      }
+
+      console.log(
+        `Inserted ${insertedCount} reviews, skipped ${skippedCount} duplicates`,
+      );
+    } else {
+      console.log(
+        `Inserted ${result?.inserted_count || 0} reviews, skipped ${result?.skipped_count || 0} duplicates`,
+      );
+    }
   } catch (error) {
     console.error("Failed to initialize payroll reviews:", error);
     throw error;

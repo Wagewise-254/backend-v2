@@ -1,15 +1,13 @@
+// backend/services/resend.js
+
 import { Resend } from 'resend';
 import dotenv from "dotenv";
 
 dotenv.config();
 
-// Initialize Resend with your API Key
 const resend = new Resend(process.env.RESEND_API_KEY);
 const DOMAIN = process.env.RESEND_DOMAIN;
 
-/**
- * sendEmailService
- */
 export const sendEmailService = async ({
   to,
   subject,
@@ -20,13 +18,13 @@ export const sendEmailService = async ({
 }) => {
   try {
     const from = DOMAIN
-      ? `${company || "WageDesk"} <noreply@${DOMAIN}>`
-      : `WageDesk <onboarding@resend.dev>`;
+      ? `${company || "WageWise"} <noreply@${DOMAIN}>`
+      : `WageWise <onboarding@resend.dev>`;
 
     console.log(`📧 Resend: Sending email to:`, Array.isArray(to) ? to : [to]);
     console.log(`📧 Resend: From: ${from}`);
 
-     const formattedTo = Array.isArray(to) ? to : [to];
+    const formattedTo = Array.isArray(to) ? to : [to];
 
     const formattedAttachments = attachments.map((file) => ({
       filename: file.filename || file.name || "attachment.pdf",
@@ -34,16 +32,16 @@ export const sendEmailService = async ({
         file.content instanceof Buffer
           ? file.content.toString("base64")
           : file.content,
+      contentType: file.contentType || 'application/pdf',
     }));
 
     const { data, error } = await resend.emails.send({
-     from,
+      from,
       to: formattedTo,
       subject,
       html,
       text,
-      attachments:
-        formattedAttachments.length > 0 ? formattedAttachments : undefined,
+      attachments: formattedAttachments.length > 0 ? formattedAttachments : undefined,
     });
 
     if (error) {
@@ -53,7 +51,6 @@ export const sendEmailService = async ({
 
     console.log("✅ Email sent:", data?.id);
     
-    // Return in same format as Brevo for compatibility
     return {
       id: data?.id,
       provider: 'resend',
@@ -65,30 +62,7 @@ export const sendEmailService = async ({
   }
 };
 
-/**
- * Test function to verify Resend is working
- */
-export const testResendConnection = async () => {
-  try {
-    // Just check if API key is valid by listing domains or sending a test
-    const { data, error } = await resend.emails.send({
-      from: "WageDesk <onboarding@resend.dev>",
-      to: ["delivered@resend.dev"], // Resend's test inbox
-      subject: "Test Connection",
-      html: "<p>Testing Resend connection</p>",
-    });
-    
-    return { success: !error, data, error };
-  } catch (error) {
-    return { success: false, error: error.message };
-  }
-};
-
-export const getPayslipEmailTemplate = (
-  employeeName,
-  companyName,
-  payrollPeriod,
-) => {
+export const getPayslipEmailTemplate = (employeeName, companyName, payrollPeriod) => {
   const currentYear = new Date().getFullYear();
 
   return `
@@ -102,7 +76,7 @@ export const getPayslipEmailTemplate = (
       <p>Best regards,<br/>${companyName} Payroll Team</p>
 
       <hr style="margin-top:24px;border:none;border-top:1px solid #eee;"/>
-      <p style="font-size:11px;color:#999;text-align:center;">Powered by WageDesk · ${currentYear}</p>
+      <p style="font-size:11px;color:#999;text-align:center;">Powered by WageWise · ${currentYear}</p>
   </div>
   `;
 };

@@ -10,7 +10,8 @@ export const getPayrollRuns = async (req, res) => {
   try {
     let query = supabase
       .from("payroll_runs")
-      .select(`
+      .select(
+        `
         *,
         payroll_details!inner (
           id,
@@ -19,7 +20,9 @@ export const getPayrollRuns = async (req, res) => {
           net_pay,
           is_eligible
         )
-      `, { count: "exact" })
+      `,
+        { count: "exact" },
+      )
       .eq("company_id", companyId);
 
     // Apply filters
@@ -37,8 +40,7 @@ export const getPayrollRuns = async (req, res) => {
 
     if (search) {
       query = query.or(
-        `payroll_number.ilike.%${search}%,` +
-        `payroll_month.ilike.%${search}%`
+        `payroll_number.ilike.%${search}%,` + `payroll_month.ilike.%${search}%`,
       );
     }
 
@@ -56,11 +58,12 @@ export const getPayrollRuns = async (req, res) => {
     if (error) throw error;
 
     // Transform data
-    const runsWithCounts = data.map(run => ({
+    const runsWithCounts = data.map((run) => ({
       ...run,
       employee_count: run.payroll_details?.length || 0,
-      eligible_count: run.payroll_details?.filter(d => d.is_eligible).length || 0,
-      payroll_details: undefined
+      eligible_count:
+        run.payroll_details?.filter((d) => d.is_eligible).length || 0,
+      payroll_details: undefined,
     }));
 
     // Get available years for filter
@@ -70,7 +73,9 @@ export const getPayrollRuns = async (req, res) => {
       .eq("company_id", companyId)
       .order("payroll_year", { ascending: false });
 
-    const availableYears = [...new Set(yearsData?.map(y => y.payroll_year) || [])];
+    const availableYears = [
+      ...new Set(yearsData?.map((y) => y.payroll_year) || []),
+    ];
 
     res.status(200).json({
       data: runsWithCounts,
@@ -78,9 +83,8 @@ export const getPayrollRuns = async (req, res) => {
       totalPages: Math.ceil(count / limit),
       currentPage: parseInt(page),
       availableYears,
-      statuses: Object.values(PAYROLL_STATUS)
+      statuses: Object.values(PAYROLL_STATUS),
     });
-
   } catch (err) {
     console.error("Get payroll runs error:", err);
     res.status(500).json({ error: err.message });
@@ -94,7 +98,8 @@ export const getPayrollRun = async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("payroll_runs")
-      .select(`
+      .select(
+        `
         *,
         payroll_details!inner (
           id,
@@ -108,7 +113,8 @@ export const getPayrollRun = async (req, res) => {
           job_title,
           department_name
         )
-      `)
+      `,
+      )
       .eq("id", runId)
       .eq("company_id", companyId)
       .single();
@@ -119,20 +125,41 @@ export const getPayrollRun = async (req, res) => {
     }
 
     const details = data.payroll_details || [];
-    const eligibleDetails = details.filter(d => d.is_eligible);
-    const ineligibleDetails = details.filter(d => !d.is_eligible);
+    const eligibleDetails = details.filter((d) => d.is_eligible);
+    const ineligibleDetails = details.filter((d) => !d.is_eligible);
 
     const totals = {
       count: details.length,
       eligible_count: eligibleDetails.length,
       ineligible_count: ineligibleDetails.length,
-      total_gross: eligibleDetails.reduce((acc, curr) => acc + (parseFloat(curr.gross_pay) || 0), 0),
-      total_net: eligibleDetails.reduce((acc, curr) => acc + (parseFloat(curr.net_pay) || 0), 0),
-      total_paye: eligibleDetails.reduce((acc, curr) => acc + (parseFloat(curr.paye_tax) || 0), 0),
-      total_nssf: eligibleDetails.reduce((acc, curr) => acc + (parseFloat(curr.nssf_deduction) || 0), 0),
-      total_shif: eligibleDetails.reduce((acc, curr) => acc + (parseFloat(curr.shif_deduction) || 0), 0),
-      total_helb: eligibleDetails.reduce((acc, curr) => acc + (parseFloat(curr.helb_deduction) || 0), 0),
-      total_housing_levy: eligibleDetails.reduce((acc, curr) => acc + (parseFloat(curr.housing_levy_deduction) || 0), 0),
+      total_gross: eligibleDetails.reduce(
+        (acc, curr) => acc + (parseFloat(curr.gross_pay) || 0),
+        0,
+      ),
+      total_net: eligibleDetails.reduce(
+        (acc, curr) => acc + (parseFloat(curr.net_pay) || 0),
+        0,
+      ),
+      total_paye: eligibleDetails.reduce(
+        (acc, curr) => acc + (parseFloat(curr.paye_tax) || 0),
+        0,
+      ),
+      total_nssf: eligibleDetails.reduce(
+        (acc, curr) => acc + (parseFloat(curr.nssf_deduction) || 0),
+        0,
+      ),
+      total_shif: eligibleDetails.reduce(
+        (acc, curr) => acc + (parseFloat(curr.shif_deduction) || 0),
+        0,
+      ),
+      total_helb: eligibleDetails.reduce(
+        (acc, curr) => acc + (parseFloat(curr.helb_deduction) || 0),
+        0,
+      ),
+      total_housing_levy: eligibleDetails.reduce(
+        (acc, curr) => acc + (parseFloat(curr.housing_levy_deduction) || 0),
+        0,
+      ),
     };
 
     res.status(200).json({
@@ -140,9 +167,8 @@ export const getPayrollRun = async (req, res) => {
       employee_count: details.length,
       eligible_count: eligibleDetails.length,
       ineligible_count: ineligibleDetails.length,
-      calculated_totals: totals
+      calculated_totals: totals,
     });
-
   } catch (error) {
     console.error("Get payroll run error:", error);
     res.status(500).json({ error: "Failed to fetch payroll run." });
@@ -150,27 +176,49 @@ export const getPayrollRun = async (req, res) => {
 };
 
 // Get payroll details (for review table)
+// Get payroll details (for review table)
 export const getPayrollDetails = async (req, res) => {
-  const { runId } = req.params;
+  const { runId, companyId } = req.params;
   const userId = req.userId;
 
   try {
-    // Get user's reviewer ID
-    const { data: reviewer } = await supabase
-      .from("company_reviewers")
-      .select("id")
-      .eq("company_user_id", (
-        await supabase
-          .from("company_users")
-          .select("id")
-          .eq("user_id", userId)
-          .single()
-      ).data?.id)
-      .single();
+    // Get company user
+    const { data: companyUser, error: companyUserError } = await supabase
+      .from("company_users")
+      .select("id, user_id, company_id")
+      .eq("user_id", userId)
+      .eq("company_id", companyId)
+      .maybeSingle();
 
+    if (companyUserError) {
+      throw companyUserError;
+    }
+
+    //console.log("COMPANY USER:", companyUser);
+
+    if (!companyUser) {
+      return res.status(403).json({
+        error: "You are not a member of this company.",
+      });
+    }
+
+    const { data: reviewer, error: reviewerError } = await supabase
+      .from("company_reviewers")
+      .select("id, reviewer_level, company_user_id")
+      .eq("company_user_id", companyUser.id)
+      .maybeSingle();
+
+    if (reviewerError) {
+      throw reviewerError;
+    }
+
+    //console.log("CURRENT REVIEWER:", reviewer);
+
+    // Get payroll details and all reviews
     const { data, error } = await supabase
       .from("payroll_details")
-      .select(`
+      .select(
+        `
         *,
         employee:employee_id (
           first_name,
@@ -181,33 +229,57 @@ export const getPayrollDetails = async (req, res) => {
           department:department_id (name),
           job_title:job_title_id (title)
         ),
-        payroll_reviews!inner (
+        payroll_reviews (
           id,
           status,
-          reviewed_at
+          reviewed_at,
+          company_reviewer_id
         )
-      `)
+      `,
+      )
       .eq("payroll_run_id", runId);
 
-    if (error) throw error;
+    if (error) {
+      throw error;
+    }
 
-    // Add my review status if reviewer exists
-    const detailsWithMyReview = data.map(detail => {
-      const myReview = detail.payroll_reviews?.find(
-        r => r.company_reviewer_id === reviewer?.id
+    const detailsWithMyReview = (data || []).map((detail) => {
+      // Ineligible employees don't participate in review
+      if (!detail.is_eligible) {
+        return {
+          ...detail,
+          my_review: null,
+          payroll_reviews: [],
+        };
+      }
+
+      const reviews = detail.payroll_reviews || [];
+
+      const myReview = reviews.find(
+        (review) => String(review.company_reviewer_id) === String(reviewer?.id),
       );
+
+      //console.log("MY REVIEW:", myReview);
 
       return {
         ...detail,
-        my_review: myReview || { status: "PENDING" }
+
+        my_review: myReview || {
+          id: null,
+          status: "PENDING",
+          reviewed_at: null,
+        },
+
+        payroll_reviews: reviews,
       };
     });
 
     res.status(200).json(detailsWithMyReview);
-
   } catch (err) {
     console.error("Get payroll details error:", err);
-    res.status(500).json({ error: err.message });
+    res.status(500).json({
+      error: "Failed to fetch payroll details.",
+    });
   }
 };
 
@@ -264,11 +336,10 @@ export const updatePayrollStatus = async (req, res) => {
       action: status === "REJECTED" ? "REJECT" : "STATUS_CHANGE",
       performedBy: userId,
       companyId: companyId,
-      newData: { status, reason }
+      newData: { status, reason },
     });
 
     res.status(200).json(data);
-
   } catch (error) {
     console.error("Update payroll status error:", error);
     res.status(500).json({ error: "Failed to update payroll status." });
@@ -327,7 +398,9 @@ export const completePayrollRun = async (req, res) => {
         await supabase
           .from("helb_accounts")
           .update({
-            current_balance: supabase.raw(`current_balance - ${detail.helb_deduction}`),
+            current_balance: supabase.raw(
+              `current_balance - ${detail.helb_deduction}`,
+            ),
             updated_at: new Date().toISOString(),
           })
           .eq("employee_id", detail.employee_id)
@@ -349,7 +422,6 @@ export const completePayrollRun = async (req, res) => {
     if (updateError) throw new Error("Failed to complete payroll run.");
 
     res.status(200).json(completedRun);
-
   } catch (error) {
     console.error("Complete payroll error:", error);
     res.status(500).json({ error: error.message });
@@ -380,7 +452,6 @@ export const cancelPayrollRun = async (req, res) => {
     }
 
     res.status(200).json({ message: "Payroll run cancelled successfully." });
-
   } catch (error) {
     console.error("Cancel payroll error:", error);
     res.status(500).json({ error: error.message });
@@ -400,7 +471,7 @@ export const deletePayrollRun = async (req, res) => {
   try {
     // Delete payroll details first
     await supabase.from("payroll_details").delete().eq("payroll_run_id", runId);
-    
+
     // Delete reviews
     await supabase.from("payroll_reviews").delete().eq("payroll_run_id", runId);
 
@@ -413,7 +484,6 @@ export const deletePayrollRun = async (req, res) => {
     if (error) throw error;
 
     res.status(200).json({ message: "Payroll run deleted successfully." });
-
   } catch (error) {
     console.error("Delete payroll run error:", error);
     res.status(500).json({ error: "Failed to delete payroll run." });
@@ -433,13 +503,12 @@ export const getPayrollYears = async (req, res) => {
 
     if (error) throw new Error("Failed to fetch payroll years.");
 
-    const uniqueYears = [...new Set(data.map(item => item.payroll_year))];
+    const uniqueYears = [...new Set(data.map((item) => item.payroll_year))];
 
     res.status(200).json({
       success: true,
       data: uniqueYears,
     });
-
   } catch (err) {
     console.error("Error fetching payroll years:", err);
     res.status(500).json({
@@ -461,7 +530,8 @@ export const getPayrollSummary = async (req, res) => {
     // Get current month payroll
     const { data: currentPayroll } = await supabase
       .from("payroll_runs")
-      .select(`
+      .select(
+        `
         id,
         status,
         total_gross_pay,
@@ -469,7 +539,8 @@ export const getPayrollSummary = async (req, res) => {
         payroll_month,
         payroll_year,
         total_employees
-      `)
+      `,
+      )
       .eq("company_id", companyId)
       .eq("payroll_month", currentMonthName)
       .eq("payroll_year", currentYear)
@@ -490,8 +561,12 @@ export const getPayrollSummary = async (req, res) => {
       .eq("payroll_year", currentYear)
       .in("status", ["PAID", "COMPLETED"]);
 
-    const yearlyGross = yearlyTotals?.reduce((sum, run) => sum + (run.total_gross_pay || 0), 0) || 0;
-    const yearlyNet = yearlyTotals?.reduce((sum, run) => sum + (run.total_net_pay || 0), 0) || 0;
+    const yearlyGross =
+      yearlyTotals?.reduce((sum, run) => sum + (run.total_gross_pay || 0), 0) ||
+      0;
+    const yearlyNet =
+      yearlyTotals?.reduce((sum, run) => sum + (run.total_net_pay || 0), 0) ||
+      0;
 
     // Get employee count
     const { count: totalEmployees } = await supabase
@@ -514,7 +589,6 @@ export const getPayrollSummary = async (req, res) => {
       yearly_total_net: yearlyNet,
       total_employees: totalEmployees || 0,
     });
-
   } catch (error) {
     console.error("Get payroll summary error:", error);
     res.status(500).json({ error: "Failed to fetch payroll summary." });
@@ -537,7 +611,10 @@ export const revertPayrollStatus = async (req, res) => {
     if (fetchError) throw fetchError;
 
     const revertRules = {
-      [PAYROLL_STATUS.APPROVED]: [PAYROLL_STATUS.DRAFT, PAYROLL_STATUS.UNDER_REVIEW],
+      [PAYROLL_STATUS.APPROVED]: [
+        PAYROLL_STATUS.DRAFT,
+        PAYROLL_STATUS.UNDER_REVIEW,
+      ],
       [PAYROLL_STATUS.LOCKED]: [PAYROLL_STATUS.APPROVED, PAYROLL_STATUS.DRAFT],
       [PAYROLL_STATUS.PAID]: [],
       [PAYROLL_STATUS.UNDER_REVIEW]: [PAYROLL_STATUS.DRAFT],
@@ -573,14 +650,13 @@ export const revertPayrollStatus = async (req, res) => {
       action: "REVERT",
       performedBy: userId,
       companyId: req.params.companyId,
-      newData: { reason }
+      newData: { reason },
     });
 
     res.json({
       message: `Payroll reverted to ${targetStatus} successfully`,
       data: updated,
     });
-
   } catch (error) {
     console.error("Revert error:", error);
     res.status(500).json({ error: "Failed to revert payroll status" });
